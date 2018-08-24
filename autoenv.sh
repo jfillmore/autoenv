@@ -16,10 +16,11 @@
 # - create command
 # - declare daemons to run somehow (symlink, script, etc)
 # - exit all?
+# - set $0 during function invocation so pause/resume doesn't look so ugly?
 
 
 # main vars of interest
-__AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached
+__AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached; 
 # trim slash
 [ "${__AUTOENV_ROOT:${#__AUTOENV_ROOT}-1}" = '/' ] \
     && __AUTOENV_ROOT="${__AUTOENV_ROOT:0:${#__AUTOENV_ROOT}-1}"
@@ -32,10 +33,11 @@ __AUTOENV_IGNORE_CD=0  # when 1 we'll not mess with 'cd' so aliases can avoid tr
 __AUTOENV_AUTOSCAN=1  # can be disabled by user
 
 __AUTOENV_SCAN_DEPTH=${AUTOENV_DEPTH:-16}  # how far up to scan at most
+__AUTOENV_TAG="æ"
 # used for quick command typing and validation
 __AUTOENV_CMDS=(
     add create delete do edit go help info ls reload scan
-    sync sync-index toggle
+    sync file-sync toggle
 )
 
 
@@ -45,19 +47,19 @@ __AUTOENV_CMDS=(
 
 __autoenv_log() {
     local color="${2:-0;34;40}"
-    echo -e "\033[1;30;40m# (autoenv) \033[${color}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[1;30;40m# ($__AUTOENV_TAG) \033[${color}m${1:-}\033[0;0;0m" >&2
 }
 
 __autoenv_log_error() {
     local color="${2:-0;31;40}"
     local error_label="${3:-error}"
-    echo -e "\033[1;31;40m# (autoenv $error_label) \033[${color}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[1;31;40m# ($__AUTOENV_TAG $error_label) \033[${color}m${1:-}\033[0;0;0m" >&2
 }
 
 __autoenv_log_debug() {
     [ ${AUTOENV_DEBUG:-0} = 1 ] || return 0
     local color="${2:-1;35;40}"
-    echo -e "\033[0;35;40m# (autoenv debug) \033[${color}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[0;35;40m# ($__AUTOENV_TAG debug) \033[${color}m${1:-}\033[0;0;0m" >&2
 }
 __autoenv_log_short() {
     local color="${2:-0;33;40}"
@@ -269,6 +271,60 @@ __autoenv_http_agent() {
 # main logic
 # ------------------------------------------------------------------------------
 
+# list the known envs
+__autoenv_ls_envs() {
+    local home_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
+    local i=0
+    local env_name env_root
+    [ -d "$home_env_dir" ] || {
+        __autoenv_log "** no envs in '$home_env_dir'; use 'autoenv create [path]' to create one"
+        return
+    }
+    find "$home_env_dir" -type d -maxdepth 1 -mindepth 1 | while read env_dir; do
+        # not setup properly (e.g. no link to the root)? skip it
+        [ -L "$env_dir/root" ] || continue
+        let i+=1
+        env_name="$(basename "$env_dir")"
+        env_root="$(readlink "$env_dir/root")"
+        __autoenv_log "** $i. env '$env_name' ($env_root)" '1;35;40'
+    done
+}
+
+
+# create a new env and print helpful usage info
+__autoenv_create() {
+    # $1 = name of the env
+    # $2 = root directory for the env
+    local home_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
+    local env_name="$1"
+    local env_root="$2"
+    [ -d "$home_env_dir/envs/$env_name" ] && {
+        __autoenv_log_error "An env named '$env_name' already exists (root=$(readlink \"$home_env_dir/envs/$env_name/root\" 2>/dev/null))"
+        return 1
+    }
+    mkdir -p "$home_env_dir/envs/$env_name" || {
+        __autoenv_log_error "Failed to create '$home_env_dir/envs/$env_name'"
+        return 1
+    }
+    ln -s "$env_root" "$home_env_dir/envs/$env_name/root" || {
+        __autoenv_log_error "Failed to link '$env_root' to '$home_env_dir/envs/$env_name/root' to create env '$env_name'"
+        return 1
+    }
+    mkdir "$home_env_dir/envs/$env_name/{vars,aliases,exit.d,init.d}" || {
+        __autoenv_log_error "Failed to create autoenv dirs in '$home_env_dir/envs/$env_name'"
+        return 1
+    }
+    mkdir "$env_root/.autoenv/{vars/aliases/exit.d/init.d}" || {
+        __autoenv_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
+        return 1
+    }
+    __autoenv_log "** created env '$env_name'" '1;32;40'
+    __autoenv_log "  - home env dirs: '$home_env_dir/envs/$env_name/'" '1;32;40'
+    __autoenv_log "  - root env dirs: '$env_root/.autoenv/'" '1;32;40'
+}
+
+
+# sync any env external resources based on $AUTOENV_SYNC_URL
 __autoenv_sync() {
     # $1 = base dir to sync to
     # $2..N = sync target names (e.g. for "GET $1/$2/index.autoenv")
@@ -397,6 +453,7 @@ __autoenv_sync() {
     )
 }
 
+
 __autoenv_sync_index() {
     # generate 'index.auto_env' for each dir given
     local dir shasum
@@ -460,12 +517,13 @@ __autoenv_sync_index() {
                 exit 1
             }
             lines=$(wc -l index.autoenv | awk '{print $1}')
-            __autoenv_log "sync-index '$dir' done (files: $lines, scripts: $scripts)"
+            __autoenv_log "index-sync '$dir' done (files: $lines, scripts: $scripts)"
         )
     done
 }
 
 
+# print information about the current env (name, root, aliases, vars, etc)
 __autoenv_log_env_info() {
     # print vars/aliases/etc for an active env
     # $1 = which env, based on depth (e.g. 0 is first)
@@ -505,29 +563,30 @@ __autoenv_envs_info() {
 
 
 __autoenv_alias() {
-    local autoenv_dir="$1"
-    local name="$2"
+    local autoenv_dir="$1"; shift
+    local name="$1"; shift
     local path="$autoenv_dir/.autoenv/aliases/$name"
     local lines
-    shift
-    shift
-    # run in a subshell
-    (
-        __AUTOENV_IGNORE_CD=1
-        if [ -x "$path" ]; then
-            __autoenv_log "$ $name  # executable" '1;36;40'
-            "$path" "$@"
-        else
-            lines=$(wc -l "$path" | awk '{print $1}')
-            __autoenv_log "$ $SHELL $name  # $lines line script" '1;36;40'
-            __autoenv_log_short "$(head "$path")" '0;36;40'
-            [ $lines -gt 10 ] && {
-                __autoenv_log_short "# --- snip ---" '1;36;40'
-            }
-            export AUTOENV_ENV="$autoenv_dir"
-            "$SHELL" "$path" "$@"
-        fi
-    )
+    local retval
+    __AUTOENV_IGNORE_CD=1
+    if [ -x "$path" ]; then
+        __autoenv_log "$ $name  # executable" '1;36;40'
+        ( "$name" "$path" "$@" )
+        revtal=$?
+    else
+        lines=$(wc -l "$path" | awk '{print $1}')
+        __autoenv_log "$ $SHELL $name  # $lines line script" '1;36;40'
+        __autoenv_log_short "$(head "$path")" '0;36;40'
+        [ $lines -gt 10 ] && {
+            __autoenv_log_short "# --- snip ---" '1;36;40'
+        }
+        export AUTOENV_ENV="$autoenv_dir"
+        ( "$SHELL" "$path" "$@" )
+        retval=$?
+        unset AUTOENV_ENV
+    fi
+    __AUTOENV_IGNORE_CD=0
+    return $retval
 }
 
 
@@ -567,6 +626,7 @@ __autoenv_init() {
 
     # and finally, our init scripts
     [ -d "$autoenv_dir/.autoenv/init.d" ] && {
+        export AUTOENV_ENV="$autoenv_dir"
         for name in $(ls -1 "$autoenv_dir/.autoenv/init.d/"); do
             __autoenv_log "$ . init.d/$name" '0;32;40'
             set +u
@@ -574,6 +634,7 @@ __autoenv_init() {
                 || __autoenv_log_error "Failed to run env init script '$name'"
             set -u
         done
+        unset AUTOENV_ENV
     }
 
     __autoenv_log_env_info $depth
@@ -703,7 +764,7 @@ COMMANDS
 
 Command names can be abbreviated so long as only one command matches.
 
-    add NAME                 add this env to ~/.autoenv/ for tracking
+    add NAME                 add this env as ~/.autoenv/\$NAME for tracking
     create [DIR] [NAME]      create skeleton .autoenv dir and print usage hints
     delete NAME              remove this env to ~/.autoenv
     do DO_ARGS               run one or more aliases from this env and/or others
@@ -716,7 +777,7 @@ Command names can be abbreviated so long as only one command matches.
     toggle                   toggle auto-scan of new autoenv envs (currently enabled=$__AUTOENV_AUTOSCAN)
     scan                     manual scan for autoenv envs changes (e.g. while auto-scan is off)
     sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
-    sync-index [DIR] [DIR2]  Generate sync index files for upload
+    file-sync [DIR] [DIR2]   Generate sync index files for upload
 
 SCAN
 
@@ -781,12 +842,18 @@ __autoenv() {
     shift
     case "$cmds" in
         add)
-            echo "TODO"
+            echo "TODO: add"
             return 1
             ;;
         create)
-            echo "TODO"
-            return 1
+            [ $# -ge 2 ] || {
+                __autoenv_log_error "create usage: NAME ENV_DIR"
+                return 1
+            }
+            __autoenv_create "$1" "$2" || {
+                __autoenv_log_error "failed to create env '$1' with root '$2'"h
+                return 1
+            }
             ;;
         delete)
             echo "TODO"
@@ -805,8 +872,7 @@ __autoenv() {
             return 1
             ;;
         ls)
-            echo "TODO"
-            return 1
+            __autoenv_ls_envs
             ;;
         help)
             __autoenv_usage
@@ -855,9 +921,9 @@ __autoenv() {
             }
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
-        sync-index)
+        file-sync)
             [ $# -gt 0 ] || {
-                __autoenv_log_error "sync-index usage: DIRS"
+                __autoenv_log_error "file-sync usage: DIR [DIR2]"
                 return 1
             }
             __autoenv_sync_index "$@"
