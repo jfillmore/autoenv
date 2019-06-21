@@ -1,9 +1,6 @@
 #!/bin/bash -u
-
-# BUGS
-# - sometimes reloads of the same env causes dupe aliases
-# - kept alias bug and $1 = unbound?
-
+# #@ = input
+#
 # TODO:
 # - add/remove envs from tracking; require add before use (e.g. no anonymous envs)
 #   - $HOME/.autoenv is special w/ tracking?
@@ -12,11 +9,8 @@
 #   - dry-run
 # - aliases requiring confirmation (e.g. aliases-confirm/ or special invoke method)
 # - env inheritance via symlinks?
-# - path hacks for scripts so executed things can use 'em (e.g. vim)
-# - create command
 # - declare daemons to run somehow (symlink, script, etc)
 # - exit all?
-# - set $0 during function invocation so pause/resume doesn't look so ugly?
 
 
 # main vars of interest
@@ -36,9 +30,90 @@ __AUTOENV_SCAN_DEPTH=${AUTOENV_DEPTH:-16}  # how far up to scan at most
 __AUTOENV_TAG="æ"
 # used for quick command typing and validation
 __AUTOENV_CMDS=(
-    add create delete do edit go help info ls reload scan
-    sync file-sync toggle
+    add
+    create
+    delete
+    do
+    edit
+    file-index
+    go
+    help
+    info
+    ls
+    reload
+    run
+    scan
+    sync
+    toggle
 )
+
+
+__autoenv_usage() {
+    __autoenv_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
+    __autoenv_log_short "
+
+COMMANDS
+
+Command names can be abbreviated so long as only one command matches.
+
+    add NAME                 add this env as ~/.autoenv/\$NAME for tracking
+    create [NAME] [DIR]      create skeleton .autoenv dir and print usage hints; default=current directory
+    delete NAME              remove this env to ~/.autoenv
+    do DO_ARGS               run one or more aliases from this env and/or others
+    edit                     launch env editor for the outer-most active env
+    file-index DIR [DIR2]    Generate sync index files for upload
+    help                     this info
+    go [-r|--run] ENV        CD to the environment named and optionally run it
+    info                     summarize active envs
+    ls                       list known autoenv envs
+    reload                   reload the current env, if any
+    run                      execute \`nohup run.d/* &>/dev/null </dev/null &\`, in order, for the outer-most env
+    scan                     manual scan for autoenv envs changes (e.g. while auto-scan is off)
+    sync DIR NAME [NAME2]    Fetch files/scripts based on \$AUTOENV_SYNC_URL
+    toggle                   toggle auto-scan of new autoenv envs (currently enabled=$__AUTOENV_AUTOSCAN)
+
+SCAN (automatic on directory change by default)
+
+Scans up to $__AUTOENV_SCAN_DEPTH parent directories to look for '.autoenv/'. If
+found, it is 'activated' until you 'cd' out of the path (or into a nested env).
+This dynamicaly sets/unsets the vars and aliases found in '.autoenv/'. Additionally, each '.autoenv/' directory may
+
+  .autoenv/
+    exit.d/   - on exit, each file is sourced (e.g. python venv deacivate)
+    init.d/   - on init, each file is sourced (e.g. python venv activate)
+    vars/     - an env vars is set for each file using its contents (
+    aliases/  - aliases to automatically define
+    scripts/  - scripts to be added to your path
+
+By default scans are limited to your \$HOME directory. This can be overridden
+by the \$AUTOENV_ROOT environmental variable. Use with caution!
+
+Aliases and scripts in deeper nested envs take priority over parent envs. The
+deepest active venv will always have 'AUTOENV_ENV' pointing to the env
+directory, but aliases will also have 'AUTOENV_PENV' set to the specific env
+that is the parent of the alias definition.
+
+TODO:
+
+When envs are tracked their name can be used to run aliases from different
+envs together. Any non-zero return codes will cause execution to stop.
+Aliases always run in a subshell to avoid affecting the current env. Alias
+names are cached on init, but the contents are ran from the file each time.
+
+When using the 'exec' command aliases must start with a '+' to allow for args.
+(e.g. '+build-all --quiet'). Aliases from any env can be referenced if prefixed
+with the env's name (e.g. '+proj2/deploy-all'), allowing for cross-env combos.
+
+
+For example:
+
+    $ cd ~/code/app-build
+    $ autoenv add app-build
+    $ cd ~/code/app-deploy
+    $ autoenv add app-deploy
+    $ autoenv exec +app-build/build-all --quiet +deploy-all
+" '0;33;40'
+}
 
 
 # ------------------------------------------------------------------------------
@@ -66,22 +141,143 @@ __autoenv_log_short() {
     echo -e "\033[${color}m${1:-}\033[0;0;0m" >&2
 }
 
-__autoenv_match_cmds() {
-    [ $# -eq 1 ] || {
-        __autoenv_log "one argument expected to __autoenv_get_cmd"
+__autoenv_prompt() {
+    # echo back user input, optionally after validating it
+    # $1  = prompt to give
+    # $2+ = -$a|--$arg OR valid matches to enforce, if any
+    # args:
+    # -m|--menu, -f*|--fuzzy*, -n|--numchars X, -b|--break
+    local errors
+    local fuzzy_ignore
+    local fuzzy_match=0
+    local i
+    local line_break=''
+    local match
+    local match_rv
+    local matched_input
+    local matches=()
+    local msg
+    local num_chars=0
+    local opts
+    local opts_msg
+    local read_args=()
+    local show_menu=0
+    local user_input
+
+    # gatcher up matches for the prompt and validation later
+    while [ $# -gt 0 ]; do
+        if [ "${1:0:1}" = '-' ]; then
+            case "$1" in
+                -b|--break):
+                    line_break="\n"
+                    ;;
+                -f*|--fuzzy*)
+                    fuzzy_match=1
+                    # if we're followed by some chars then those are ones we ignore
+                    [ "${1:0:2}" == '--' ] \
+                        && fuzzy_ignore="${1:7}" \
+                        || fuzzy_ignore="${1:2}"
+                    ;;
+                -m|--menu)
+                    show_menu=1
+                    ;;
+                -n|--numchars)
+                    [ $# -ge 2 ] || {
+                        echo "Missing __autoenv_prompt arg to -n|numchars"
+                        return 1
+                    }
+                    num_chars=$2
+                    shift
+                    ;;
+                *)
+                    echo "Unknown __autoenv_prompt arg: $1" >&2
+                    return 1
+                    ;;
+            esac
+        else
+            [ -z "$msg" ] \
+                && msg="$1" \
+                || {
+                    [ -n "$1" ] && matches+=("$1")
+                }
+        fi
+        shift
+    done
+    [ ${#matches[*]} -gt 0 ] && {
+        [ $show_menu -eq 0 ] \
+            && opts=" (${matches[0]}" \
+            || opts="\n  * ${matches[0]}"
+        for ((i=1; i<${#matches[*]}; i++)); do
+            [ $show_menu -eq 0 ] \
+                && opts="$opts|${matches[$i]}" \
+                || opts="$opts\n  * ${matches[$i]}"
+        done
+        [ $show_menu -eq 0 ] && opts="$opts)"
+    }
+    [ $fuzzy_match -eq 1 -a ${#matches[*]} -eq 0 ] && {
+        echo "__autoenv_prompt error: You must provide matches to use --fuzzy" >&2
+        return 1
+    }
+    [ $num_chars != '0' ] && read_args+=(-n $num_chars)
+    # read and optionally validate the input until we get something right
+    match=
+    [ $fuzzy_match -eq 1 ] && opts_msg=" (prefix match allowed)"
+    [ $show_menu -eq 0 ] \
+        && msg="$msg$opts_msg$opts" \
+        || msg="Options$opts_msg:$opts\n$msg"
+    while [ -z "$match" ]; do
+        error=
+        echo -en "$line_break$msg > " >&2
+        [ "${#read_args[*]}" -eq 0 ] \
+            && read user_input \
+            || read "${read_args[@]}" user_input
+        [ $num_chars -gt 0 ] && echo >&2
+        if [ $fuzzy_match -eq 0 ]; then
+            for ((i=0; i<${#matches[*]}; i++)); do
+                [ "$user_input" = "${matches[i]}" ] && {
+                    match="$user_input"
+                    break
+                }
+            done
+        else
+            matched_input="$(__autoenv_match_one "$user_input" "$fuzzy_ignore" "${matches[@]}")"
+            match_rv=$?
+            if [ $match_rv -eq 0 ]; then
+                match="$matched_input"
+                break
+            elif [ $match_rv -eq 1 ]; then
+                error="no valid option found for '$user_input'" >&2
+            else
+                error="multple matches found: '$user_input': $matched_input" >&2
+            fi
+        fi
+        [ ${#matches[*]} -eq 0 ] && match="$user_input"
+        [ ${#match} -eq 0 ] \
+            && echo -e "\nPlease try again: $error\n" >&2
+    done
+    echo "$match"
+    set +x
+}
+
+__autoenv_match_one() {
+    [ $# -ge 3 ] || {
+        __autoenv_log "at least three arguments expected to __autoenv_get_cmd: input chars_to_ignore match1 ... matchN"
         return 1
     }
     local matches=()
     local i cmd
-    local input="$1"
+    local input="$1"; shift
+    local ignore="$1"; shift
     local input_len=${#input}
-    for ((i=0; i<${#__AUTOENV_CMDS[*]}; i++)); do
-        cmd="${__AUTOENV_CMDS[i]}"
+    local opts=("$@")
+
+    for ((i=0; i<${#opts[*]}; i++)); do
+        cmd=$(echo "${opts[i]}" | tr -d "$ignore")
+        [ -n "$cmd" ] || continue
         # debug: echo "matching: '$input' = '${cmd:0:input_len}'" >&2
         [ "$input" = "${cmd:0:input_len}" ] \
             && matches[${#matches[*]}]="$cmd"
     done
-
     echo "${matches[@]}"
     # debug: echo "matches: ${matches[@]}" >&2
     if [ ${#matches[*]} -eq 0 ]; then
@@ -105,7 +301,7 @@ __autoenv_is_active() {
 }
 
 
-__autoenv_is_listed() {
+__autoenv_in_list() {
     # return 0 if $1 is found in later in $@, otherwise 1
     local wanted="$1"
     shift
@@ -116,6 +312,52 @@ __autoenv_is_listed() {
     return 1
 }
 
+
+__autoenv_path_swap() {
+    # replace or trim an entry in $PATH
+    # $0 = path to match
+    # $1 = optional replacement to make; prunes path otherwise
+    local tmp_path=":$PATH:"
+    [ $# -eq 2 ] \
+        && tmp_path="${tmp_path/:$1:/:$2:}" \
+        || tmp_path="${tmp_path/:$1:/:}"
+    tmp_path="${tmp_path%:}"
+    tmp_path="${tmp_path#:}"
+    PATH=$tmp_path
+}
+
+
+__autoenv_path_prepend_scripts() {
+    # insert an env's scripts dir into the PATH, ensuring child paths come before parent envs
+    # $1 = path to prepend
+    # $2 = depth of the path we're prepending, to ensure we insert before parents
+    local new_path="$1"
+    local depth="$2"
+    local env_dir="${new_path%%.autoenv/scripts}"
+    local parent_env
+    local i
+    # if we're at min depth, just append to PATH since we know we're last
+    if [ $depth -eq 1 ]; then
+        __autoenv_log_debug "appending first env ($env_dir) to PATH"
+        PATH="$PATH:$new_path"
+        return 0
+    fi
+    # otherwise we need to figure out if any parent envs have scripts
+    # if so, make sure we insert before the nearest one
+    for ((i=$depth-1; i>0; i--)); do
+        parent_env="${__AUTOENV_ENVS[$i-1]}"
+        [ -d "$parent_env/.autoenv/scripts" ] && {
+            __autoenv_log_debug "prepending env '$env_dir' before '$parent_env' in PATH"
+            __autoenv_path_swap \
+                "$parent_env/.autoenv/scripts" \
+                "$new_path:$parent_env/.autoenv/scripts"
+            return 0
+        }
+    done
+    # no parents had a scripts dir
+    __autoenv_log_debug "appending env ($new_path); first child w/ scripts"
+    PATH="$PATH:$new_path"
+}
 
 __autoenv_get_depth() {
     # return the depth a venv was found at; 1 based index
@@ -242,6 +484,63 @@ __autoenv_depth() {
 }
 
 
+__autoenv_list_index() {
+    # get the index position for an item in a string list
+    # returns an empty string and  non-0 if not found
+    # $1=list string
+    # $2=item to search for
+    # $3=delimiter (optional)
+    local list="$1"
+    local search="$2"
+    local sep="${3:-:}"
+    local i=0
+    local item
+    (
+        IFS="$sep"
+        for item in $list; do
+            [ "$item" = "$search" ] && {
+                echo $i
+                exit 0
+            }
+            let i+=1
+        done
+        exit 1
+    )
+    return $?
+}
+
+
+__autoenv_list_update() {
+    # update a list with a new item at the position specified
+    # $1=list
+    # $2=item to insert
+    # $3=position to insert at (default: last)
+    # $4=delimiter (optional)
+    local list="$1"
+    local insert="$2"
+    local pos="{$3:-}"
+    local sep="${$4:-:}"
+    local final_list=''
+    local item
+    local origIFS="$IFS"
+    IFS="$sep"
+    for item in $list; do
+        [ $i -eq $pos ] && {
+            [ $i -eq 0 ] \
+                && final_list="$insert$sep$item" \
+                || final_list="$final_list$sep$insert$sep$item"
+        } || {
+            [ $i -eq 0 ] \
+                && final_list="$item" \
+                || final_list="$final_list$sep$item"
+        }
+        let i+=1
+    done
+    IFS="$origIFS"
+    echo "$final_list"
+}
+
+
 __autoenv_http_agent() {
     local agent https
     local url="$1"
@@ -310,11 +609,12 @@ __autoenv_create() {
         __autoenv_log_error "Failed to link '$env_root' to '$home_env_dir/envs/$env_name/root' to create env '$env_name'"
         return 1
     }
-    mkdir "$home_env_dir/envs/$env_name/{vars,aliases,exit.d,init.d}" || {
-        __autoenv_log_error "Failed to create autoenv dirs in '$home_env_dir/envs/$env_name'"
-        return 1
-    }
-    mkdir "$env_root/.autoenv/{vars/aliases/exit.d/init.d}" || {
+    # TODO... finalize
+    #mkdir "$home_env_dir/envs/$env_name/{vars,aliases,exit.d,init.d,run.d}" || {
+    #    __autoenv_log_error "Failed to create autoenv dirs in '$home_env_dir/envs/$env_name'"
+    #    return 1
+    #}
+    mkdir "$env_root/.autoenv/{vars,aliases,exit.d,init.d,run.d}" || {
         __autoenv_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
     }
@@ -324,15 +624,175 @@ __autoenv_create() {
 }
 
 
+# edit aspects of an environment in #EDITOR; always assumes current environment
+__autoenv_edit() {
+    local add_exec=0
+    local choice
+    local choices
+    local do_reload=0
+    local env_opts=(
+        '(a)lias'
+        '(e)xit script'
+        '(i)nit script'
+        '(s)cript'
+        '(v)ar'
+    )
+    local find_args=(-maxdepth 1 -type f)
+    local item_type
+    local needs_exec=0
+    local new
+    local origIFS="$IFS"
+    local path
+    local retval
+
+    [ -z "$VISUAL" ] && {
+        echo "Please set VISUAL to use the 'edit' command." >&2
+        return 1
+    }
+
+    # determine what type of thing to edit
+    [ $# -eq 0 ] && {
+        __autoenv_log "=== Editing $AUTOENV_ENV ==="
+        item_type="$(
+            __autoenv_prompt -f'()' -n 1 -m "Please choose what to edit" \
+            "${env_opts[@]}"
+        )"
+    } || {
+        item_type=$(__autoenv_match_one "$1" '()' "${env_opts[@]}") \
+            || {
+                echo "Input '$1' failed to match at least exactly one of: ${env_opts[@]} (matched: '$item_type')" >&2
+                return 1
+            }
+        shift
+    }
+    case "$item_type" in
+        alias)
+            path="$AUTOENV_ENV/.autoenv/aliases"
+            ;;
+        exit\ script)
+            path="$AUTOENV_ENV/.autoenv/exit.d"
+            mkdir -p "$path" &>/dev/null
+            find_args+=(-perm -u+x)
+            needs_exec=1
+            ;;
+        init\ script)
+            path="$AUTOENV_ENV/.autoenv/init.d"
+            mkdir -p "$path" &>/dev/null
+            find_args+=(-perm -u+x)
+            needs_exec=1
+            ;;
+        script)
+            path="$AUTOENV_ENV/.autoenv/scripts"
+            mkdir -p "$path" &>/dev/null
+            find_args+=(-perm -u+x)
+            needs_exec=1
+            ;;
+        var)
+            path="$AUTOENV_ENV/.autoenv/vars"
+            mkdir -p "$path" &>/dev/null
+            ;;
+        *)
+            echo "Failed to parse item type: $item_type" >&2
+            return 1
+            ;;
+    esac
+
+    # figure out which item to edit
+    mkdir -p "$path" &>/dev/null
+    new="+ (new $item_type)"
+    IFS=$'\n'
+    choices=($(cd "$path" && find . "${find_args[@]}" | sort | sed 's/^\.\///g'))
+    choices+=("$new")
+    IFS="$origIFS"
+    [ $# -eq 0 ] && {
+        __autoenv_log "=== Editing $AUTOENV_ENV / $item_type ==="
+        choice=$(__autoenv_prompt -b -f -m "Which $item_type? (save an empty file to delete)" "${choices[@]}")
+    } || {
+        choice=$(__autoenv_match_one "$1" '' "${choices[@]}") \
+            || {
+                echo "Input '$1' failed to match at least one of: ${choices[@]} (matched: '$choice')" >&1
+                return 1
+            }
+        shift
+    }
+    if [ "$choice" = "$new" ]; then
+        add_exec=$needs_exec
+            do_reload=1
+            choice=$(__autoenv_prompt "Enter name of $item_type to create")
+        [ -n "$choice" ] || {
+            echo "Aborting; no $item_type name given to create" >&2
+            return 1
+        }
+    fi
+
+    # finally, edit the item in question
+    $VISUAL "$path/$choice"
+    retval=$?
+    [ $retval -eq 0 ] && {
+        # look for post-edit adjustments (e.g. delete empty stuff, add exec perms)
+        if [ \! -s "$path/$choice" ]; then
+            rm -f "$path/$choice"
+            __autoenv_log "Deleting empty $item_type" >&2
+        elif [ $add_exec -eq 1 ]; then
+            chmod u+x "$path/$choice" || {
+                echo "Failed to add executions perms to '$path/$choice'" >&2
+                return 1
+            }
+        fi
+        # if we added something new we should just assume an env reload (even though scripts/init.d/exit.d don't really need it)
+        [ $do_reload -eq 1 ] && __autoenv reload
+    }
+
+    return $retval
+}
+
+
+# use nohup and tie-off std{in/out/err} to execute each script in
+# .autoenv/run.d in alphabetical order
+__autoenv_run() {
+    local env_name
+    [ $# -gt 0 ] && {
+        __autoenv_log_error "usage: autoenv run [ENV]"
+        return 1
+    } || {
+        [ $# -eq 1 ] && {
+            env_name="$1"
+        }
+    }
+}
+
+
 # sync any env external resources based on $AUTOENV_SYNC_URL
 __autoenv_sync() {
     # $1 = base dir to sync to
     # $2..N = sync target names (e.g. for "GET $1/$2/index.autoenv")
     # $AUTOENV_SYNC_URL = env var to URL containing sync dirs w/ index.autoenv files
+    [ $# -eq 0 ] && {
+        cat <<EOI
+Usage: autoenv sync DIR NAME [NAME2]
+
+Sync files to the DIR given based on the target NAME(S). Requires you to set
+\$AUTOENV_SYNC_URL to a website that contains directories matching the NAME(S)
+given. Each directory must have an "index.autoenv" file generated by the
+"file-index" autoenv command. Uses 'curl' by default but falls back to 'wget'
+if curl is not installed.
+
+Examples:
+
+# generate a file index of favorite scripts or dev tools within a git repo
+[foo ~]$ cd ~/git/my-default-env/ && autoenv file-index bash python
+[foo ~/git/my-default-env]$ git add . && git commit -m 'blah blah' && git push
+
+# on another host, automatically initialize our bash stuff
+[bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
+[bar ~]$ autoenv sync . bash
+EOI
+        return 1
+    }
     local autoenv_dir="$1" && shift
     local sync_src="${AUTOENV_SYNC_URL:-}"
     [ -n "$sync_src" ] || {
-        __autoenv_log_error "Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories." 
+        __autoenv_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories." 
         return 1
     }
     local http=$(__autoenv_http_agent) || return 1
@@ -454,7 +914,7 @@ __autoenv_sync() {
 }
 
 
-__autoenv_sync_index() {
+__autoenv_file_index() {
     # generate 'index.auto_env' for each dir given
     local dir shasum
     shasum="$(which shasum 2>/dev/null) -a 1" \
@@ -530,20 +990,34 @@ __autoenv_log_env_info() {
     local depth="$1"
     local i item
     local items
+    local env_dir="${__AUTOENV_ENVS[depth-1]}"
     
     items=()
     for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
         item="${__AUTOENV_VARS[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && __autoenv_log "* ENV VARS: ${items[*]}" '1;34;40'
+    [ ${#items[*]} -gt 0 ] && __autoenv_log "  * ENV VARS: ${items[*]}" '1;34;40'
 
     items=()
     for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
         item="${__AUTOENV_ALIASES[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && __autoenv_log "* ALIASES: ${items[*]}" '1;34;40'
+    [ ${#items[*]} -gt 0 ] && __autoenv_log "  * ALIASES: ${items[*]}" '1;34;40'
+
+    (
+        [ -d "$env_dir/.autoenv/scripts/" ] && {
+            items=()
+            for item in "$env_dir/.autoenv/scripts/"*; do
+                # ignore non-scripts and potential unmatched wildcard
+                [ -x "$item" ] && {
+                    items[${#items[*]}]="$(basename "$item")"
+                }
+            done
+            [ ${#items[*]} -gt 0 ] && __autoenv_log "  * SCRIPTS: ${items[*]}" '1;34;40'
+        }
+    )
 }
 
 
@@ -562,34 +1036,6 @@ __autoenv_envs_info() {
 }
 
 
-__autoenv_alias() {
-    local autoenv_dir="$1"; shift
-    local name="$1"; shift
-    local path="$autoenv_dir/.autoenv/aliases/$name"
-    local lines
-    local retval
-    __AUTOENV_IGNORE_CD=1
-    if [ -x "$path" ]; then
-        __autoenv_log "$ $name  # executable" '1;36;40'
-        ( "$name" "$path" "$@" )
-        revtal=$?
-    else
-        lines=$(wc -l "$path" | awk '{print $1}')
-        __autoenv_log "$ $SHELL $name  # $lines line script" '1;36;40'
-        __autoenv_log_short "$(head "$path")" '0;36;40'
-        [ $lines -gt 10 ] && {
-            __autoenv_log_short "# --- snip ---" '1;36;40'
-        }
-        export AUTOENV_ENV="$autoenv_dir"
-        ( "$SHELL" "$path" "$@" )
-        retval=$?
-        unset AUTOENV_ENV
-    fi
-    __AUTOENV_IGNORE_CD=0
-    return $retval
-}
-
-
 __autoenv_init() {
     local autoenv_dir="$1"
     local name value depth item
@@ -601,6 +1047,8 @@ __autoenv_init() {
         return 1
     }
     __autoenv_log "$depth. ++ init env $autoenv_dir"
+    # we may init out-of-order to use our own env for init
+    export AUTOENV_ENV="$autoenv_dir"
 
     # first look at the vars to initialize those ENV variables
     [ -d "$autoenv_dir/.autoenv/vars" ] && {
@@ -613,22 +1061,28 @@ __autoenv_init() {
         done
     }
 
-    # aliases -- short command snippits
+    # aliases
     [ -d "$autoenv_dir/.autoenv/aliases" ] && {
         for name in $(ls -1 "$autoenv_dir/.autoenv/aliases/"); do
             __AUTOENV_ALIASES[${#__AUTOENV_ALIASES[*]}]="$depth:$name"
             # does a nested env have this same alias defined?
             item="$(__autoenv_first_above "$name" "$depth" "${__AUTOENV_ALIASES[@]}")"
-            [ -z "$item" ] \
-                && alias "$name"="__autoenv_alias '$autoenv_dir' '$name'"
+            [ -z "$item" ] && alias "$name"="AUTOENV_PENV='$autoenv_dir' $(<"$autoenv_dir/.autoenv/aliases/$name")"
         done
+    }
+
+    # scripts
+    [ -d "$autoenv_dir/.autoenv/scripts" ] && {
+        # if we're more than on level deep we need to be before our parent
+        # ... that is, the first parent with custom scripts
+        __autoenv_path_prepend_scripts "$autoenv_dir/.autoenv/scripts" $depth
     }
 
     # and finally, our init scripts
     [ -d "$autoenv_dir/.autoenv/init.d" ] && {
-        export AUTOENV_ENV="$autoenv_dir"
         for name in $(ls -1 "$autoenv_dir/.autoenv/init.d/"); do
             __autoenv_log "$ . init.d/$name" '0;32;40'
+            # many scripts use sloppy var handline, so ignore this
             set +u
             source "$autoenv_dir/.autoenv/init.d/$name" \
                 || __autoenv_log_error "Failed to run env init script '$name'"
@@ -638,6 +1092,8 @@ __autoenv_init() {
     }
 
     __autoenv_log_env_info $depth
+    # we may have init'd out-of-order, so always point to the last env
+    AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
     
     return 0
 }
@@ -650,7 +1106,8 @@ __autoenv_exit() {
 
     __autoenv_is_active "$autoenv_dir" || return 0
     depth=$(__autoenv_depth "$autoenv_dir")
-    __autoenv_log "-- $depth. exit env $autoenv_dir" '1;31;40'
+    __autoenv_log "$depth. -- exit env $autoenv_dir" '1;31;40'
+    AUTOENV_ENV="$autoenv_dir"
 
     # run exit scripts
     [ -d "$autoenv_dir/.autoenv/exit.d" ] && {
@@ -680,6 +1137,11 @@ __autoenv_exit() {
         && __AUTOENV_ALIASES=("${kept_aliases[@]}") \
         || __AUTOENV_ALIASES=()
 
+    # cleanup PATH
+    [ -d "$autoenv_dir/.autoenv/scripts" ] && {
+        __autoenv_path_swap "$autoenv_dir/.autoenv/scripts"
+    }
+
     # unset vars
     [ ${#__AUTOENV_VARS[*]} -gt 0 ] && {
         for item in "${__AUTOENV_VARS[@]}"; do
@@ -707,7 +1169,11 @@ __autoenv_exit() {
         && __AUTOENV_VARS=("${kept_vars[@]}") \
         || __AUTOENV_VARS=()
 
+    # stop tracking this env, and set our global to the top-most env, if any
     __autoenv_rem_env "$autoenv_dir"
+    [ ${#__AUTOENV_ENVS[*]} -eq 0 ] \
+        && AUTOENV_ENV= \
+        || AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
     return 0
 }
 
@@ -738,7 +1204,7 @@ __autoenv_search() {
         if [ ${#found_envs[*]} -eq 0 ]; then
             __autoenv_exit "$env"
         else
-            __autoenv_is_listed "$env" "${found_envs[@]}" \
+            __autoenv_in_list "$env" "${found_envs[@]}" \
                 || __autoenv_exit "$env"
         fi
     done
@@ -749,98 +1215,34 @@ __autoenv_search() {
         if [ ${#__AUTOENV_ENVS[*]} -eq 0 ]; then
             __autoenv_init "$env"
         else
-            __autoenv_is_listed "$env" "${__AUTOENV_ENVS[@]}" \
+            __autoenv_in_list "$env" "${__AUTOENV_ENVS[@]}" \
                 || __autoenv_init "$env"
         fi
     done
 }
 
 
-__autoenv_usage() {
-    __autoenv_log " Augments 'cd' to manage aliases and env vars based on '.virtualenv' dirs" '1;37;40'
-    __autoenv_log_short "
-
-COMMANDS
-
-Command names can be abbreviated so long as only one command matches.
-
-    add NAME                 add this env as ~/.autoenv/\$NAME for tracking
-    create [DIR] [NAME]      create skeleton .autoenv dir and print usage hints
-    delete NAME              remove this env to ~/.autoenv
-    do DO_ARGS               run one or more aliases from this env and/or others
-    go NAME                  change directories and activate the env named
-    help                     this info
-    info                     summarize current env
-    edit                     launch env editor
-    ls                       list known autoenv envs
-    reload                   reload the current env, if any
-    toggle                   toggle auto-scan of new autoenv envs (currently enabled=$__AUTOENV_AUTOSCAN)
-    scan                     manual scan for autoenv envs changes (e.g. while auto-scan is off)
-    sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
-    file-sync [DIR] [DIR2]   Generate sync index files for upload
-
-SCAN
-
-Scans up to $__AUTOENV_SCAN_DEPTH parent directories to look for '.autoenv/'. If
-found, it is 'activated' until you 'cd' out of the path (or into a nested env).
-This dynamicaly sets/unsets the vars and aliases found in '.autoenv/'.
-
-  .autoenv/
-    exit.d/   - on exit, each file is sourced (e.g. python venv deacivate)
-    vars/     - an env vars is set for each file using its contents (
-    aliases/  - aliases are created for each file name to run the binary/script in a subshell
-    init.d/   - on init, each file is sourced (e.g. python venv activate)
-
-By default scans are limited to your \$HOME directory. This can be overridden
-by the \$AUTOENV_ROOT environmental variable. Use with caution!
-
-The environmental variable AUTOENV_DIR will be set during execution of aliases,
-init, and exit scripts. It is set to the directory where '.autoenv' was found.
-
-# TODO: envs must be added explicitly; otherwise this warns of presence only
-
-DO
-
-When envs are tracked their name can be used to run aliases from different
-envs together. Any non-zero return codes will cause execution to stop.
-Aliases always run in a subshell to avoid affecting the current env. Alias
-names are cached on init, but the contents are ran from the file each time.
-
-When using the 'exec' command aliases must start with a '+' to allow for args.
-(e.g. '+build-all --quiet'). Aliases from any env can be referenced if prefixed
-with the env's name (e.g. '+proj2/deploy-all'), allowing for cross-env combos.
-
-
-For example:
-
-    $ cd ~/code/app-build
-    $ autoenv add app-build
-    $ cd ~/code/app-deploy
-    $ autoenv add app-deploy
-    $ autoenv exec +app-build/build-all --quiet +deploy-all
-" '0;33;40'
-}
-
-
 __autoenv() {
-    local cmds retval i
+    # $1 = command
+    # $2+ = command args, if any
+    local cmd retval i
     [ $# -eq 0 ] && {
         __autoenv_usage
         return 2
     }
-    cmds="$(__autoenv_match_cmds "$1")" 
+    cmd=$(__autoenv_match_one "$1" '' "${__AUTOENV_CMDS[@]}")
     retval=$?
-    # if retval was 1 its a mismatch, but we'll handle that below
+    # if retval was 1 its a mismatch, so fail out
     [ $retval -ge 1 ] && {
         __autoenv_usage
         [ $retval -eq 1 ] \
             && echo "ERROR: No autoenv commands matched '$1'" >&2
         [ $retval -gt 1 ] \
-            && echo "ERROR: Multiple autoenv commands matched '$1': $cmds" >&2
+            && echo "ERROR: Multiple autoenv commands matched '$1': $cmd" >&2
         return $retval
     }
     shift
-    case "$cmds" in
+    case "$cmd" in
         add)
             echo "TODO: add"
             return 1
@@ -851,7 +1253,7 @@ __autoenv() {
                 return 1
             }
             __autoenv_create "$1" "$2" || {
-                __autoenv_log_error "failed to create env '$1' with root '$2'"h
+                __autoenv_log_error "failed to create env '$1' with root '$2'"
                 return 1
             }
             ;;
@@ -864,12 +1266,7 @@ __autoenv() {
             return 1
             ;;
         edit)
-            echo "TODO"
-            return 1
-            ;;
-        go)
-            echo "TODO"
-            return 1
+            __autoenv_edit "$@" || return 1
             ;;
         ls)
             __autoenv_ls_envs
@@ -908,6 +1305,9 @@ __autoenv() {
             # and initialize any found in the current dir (possibly less than we had before)
             __autoenv_search
             ;;
+        run)
+            __autoenv_run "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
+            ;;
         info)
             __autoenv_envs_info
             ;;
@@ -921,12 +1321,12 @@ __autoenv() {
             }
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
-        file-sync)
+        file-index)
             [ $# -gt 0 ] || {
-                __autoenv_log_error "file-sync usage: DIR [DIR2]"
+                __autoenv_log_error "file-index usage: DIR [DIR2]"
                 return 1
             }
-            __autoenv_sync_index "$@"
+            __autoenv_file_index "$@"
             ;;
         *)
             __autoenv_usage

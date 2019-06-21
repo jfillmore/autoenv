@@ -15,6 +15,9 @@ echo 'if [[ "$-" =~ 'i' ]]; then source ~/.auteoenv.sh; fi' >> ~/.bashrc
 source ~/.autoenv.sh
 
 # And then maybe:
+mkdir -p ~/.autoenv/vars/
+echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/' \
+    > ~/.autoenv/vars/AUTOENV_SYNC_URL
 autoenv sync bash vim \
     && mv ~/.autoenv.sh ~/.bashrc.d/
 ```
