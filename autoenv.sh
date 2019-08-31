@@ -938,19 +938,20 @@ lib_log_env_info() {
     local env_dir="${__AUTOENV_ENVS[depth]}"
     
     lib_log "$(($depth + 1)). ** $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) ** $(lib_color white "$env_dir" white)" '0;36;40'
+
     items=()
     for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
         item="${__AUTOENV_VARS[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && lib_log "  * ENV VARS: $(lib_color lime "${items[@]}")" '0;32;40'
+    [ ${#items[*]} -gt 0 ] && lib_log "  * ENV VARS: $(lib_color lime "${items[*]}")" '0;32;40'
 
     items=()
     for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
         item="${__AUTOENV_ALIASES[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && lib_log "  * ALIASES: $(lib_color lemon "${items[@]}")" '0;33;40'
+    [ ${#items[*]} -gt 0 ] && lib_log "  * ALIASES: $(lib_color lemon "${items[*]}")" '0;33;40'
 
     (
         [ -d "$env_dir/.autoenv/scripts/" ] && {
@@ -961,7 +962,7 @@ lib_log_env_info() {
                     items[${#items[*]}]="$(basename "$item")"
                 }
             done
-            [ ${#items[*]} -gt 0 ] && lib_log "  * SCRIPTS: $(lib_color pink "${items[@]}")" '0;31;40'
+            [ ${#items[*]} -gt 0 ] && lib_log "  * SCRIPTS: $(lib_color pink "${items[*]}")" '0;31;40'
         }
     )
 }
@@ -1267,7 +1268,7 @@ __autoenv() {
             __autoenv_scan
             ;;
         create)
-            lib_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" && {
                 __autoenv_usage_help
                 return
             }
@@ -1307,7 +1308,7 @@ __autoenv() {
                 __autoenv_usage_sync
                 return 1
             }
-            lib_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" && {
                 __autoenv_usage_sync
                 return
             }
@@ -1319,7 +1320,7 @@ __autoenv() {
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
         scan)
-            lib_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" && {
                 __autoenv_usage_scan
                 return
             }
