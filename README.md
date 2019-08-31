@@ -28,13 +28,12 @@ echo 'if [[ "$-" =~ 'i' ]]; then source ~/.auteoenv.sh; fi' >> ~/.bashrc
 ## Advanced usage:
 
 ```
-# snag the script; download to a temporary location
-curl -s \
-    -o ~/autoenv.sh \
-    https://raw.githubusercontent.com/jfillmore/autoenv/master/autoenv.sh
+# clone the script
+mkdir -p ~/dev && cd ~/dev
+git clone https://github.com/jfillmore/autoenv.git
 
 # initialize ourself
-source ~/autoenv.sh
+source ~/dev/autoenv/autoenv.sh
 
 # set ourselves up to sync against an external source
 mkdir -p ~/.autoenv/vars/

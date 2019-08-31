@@ -36,11 +36,16 @@ __AUTOENV_CMDS=(
     sync
 )
 
+# other key env vars:
+AUTOENV=${AUTOENV:-1}
+AUTOENV_DEBUG="${AUTOENV_DEBUG:-0}"
+AUTOENV_ENV=
+AUTOENV_PENV=
+
 
 __autoenv_usage() {
     __autoenv_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
     __autoenv_log_short "
-
 COMMANDS
 
 Command and argument names (except paths) can be abbreviated so long as only
@@ -65,6 +70,43 @@ one match is found.
   file-index DIR [DIR2]    Generate index files in each dir; needed for syncs
   sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
 
+Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
+"
+}
+
+
+__autoenv_usage_sync() {
+    __autoenv_log "Usage: autoenv sync SYNCNAME [SYNCNAME2]"
+    __autoenv_log_short "
+
+Sync files to the DIR given based on the target NAME(S). Requires you to set
+\$AUTOENV_SYNC_URL to a website that contains directories matching the
+SYNCNAME(S) given. Each directory must have an 'index.autoenv' file generated
+by the 'file-index' autoenv command. Uses 'curl' by default but falls back to
+'wget' if curl is not installed.
+
+ARGUMENTS:
+
+  -h|--help         This information
+  -v|--verbose      Print verbose sync information
+  -d|--dryrun       Do not make any changes; just report commands that would run
+  SYNCNAME          Upstream name of target folder to sync locally (repeatable)
+
+Examples:
+
+  # generate a file index of favorite scripts or dev tools within a git repo
+  [foo ~]$ cd ~/git/my-default-env/ && autoenv file-index bash python
+  [foo ~/git/my-default-env]$ git add . && git commit -m 'blah blah' && git push
+
+  # on another host, automatically initialize our bash stuff
+  [bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
+  [bar ~]$ autoenv sync bash
+"
+}
+
+__autoenv_usage_scan() {
+    __autoenv_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
+    __autoenv_log_short "
 
 SCAN (automatic on directory change by default)
 
@@ -91,11 +133,61 @@ Aliases and scripts in deeper nested envs take priority over parent envs. The
 deepest active venv will always have 'AUTOENV_ENV' pointing to the env
 directory, but aliases will also have 'AUTOENV_PENV' set to the specific env
 that is the parent of the alias definition.
-
-Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
 "
 }
 
+
+__autoenv_usage_add() {
+    __autoenv_log "Usage: autoenv add [ENV_DIR] [ENV_NAME]"
+    __autoenv_log_short "
+
+Add tracking for the ENV_DIR (default: current directory) with the given ENV
+NAME (defaults to ENV_DIR/.name or basename ENV_DIR). Assumes that .autoenv/
+already exists in ENV_DIR.
+
+Tracking is added to $__AUTOENV_ROOT/envs/ using ENV_NAME.
+"
+}
+
+
+__autoenv_usage_create() {
+    __autoenv_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
+    __autoenv_log_short "
+
+Create an env in the directory given (default: current directory) and with the
+name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
+to the ENV_DIR.
+
+Automatically creates '.autoenv/{vars,aliases,exit.d,init.d,up.d}/' in ENV_DIR.
+"
+}
+
+
+__autoenv_usage_forget() {
+    __autoenv_log "Usage: autoenv forget [ENV_NAME]"
+    __autoenv_log_short "
+
+Forget about an env (e.g. remove tracking from $__AUTOENV_ROOT/envs/). Inverse
+of 'add'.
+"
+}
+
+
+__autoenv_usage_file-index() {
+    __autoenv_log "Usage: autoenv file-index DIR [DIR2]"
+    __autoenv_log_short "
+"
+}
+
+
+__autoenv_usage_edit() {
+    __autoenv_log "Usage: autoenv edit [WHAT] [WHICH]"
+    __autoenv_log_short "
+
+Edit active (based on depth) env, optionally specifying what/which things to
+edit. Allows partial matches as long as arguments are unambiguous.
+"
+}
 
 
 # ------------------------------------------------------------------------------
@@ -293,13 +385,34 @@ __autoenv_is_active() {
 }
 
 
-# return 0 if $1 is found in later in $@, otherwise 1
+# return 0 if any args prior to -- are found the rest of the args
+# e.g.:
+# 1) __autoenv_in_list foo bar -- at the bar && echo "saw foo|bar"
+# 2) __autoenv_in_list foo bar -- at the food bard || echo "did not see foo|bar"
 __autoenv_in_list() {
-    local wanted="$1"
-    shift
+    local wanted=()
+    local searching=()
+    local pivot=0
+    local i j
+
     while [ $# -gt 0 ]; do
-        [ "$wanted" = "$1" ] && return 0
+        case "$1" in
+            --)
+                pivot=1
+                ;;
+            *)
+                [ $pivot -eq 0 ] \
+                    && wanted+=("$1") \
+                    || searching+=("$1")
+        esac
         shift
+    done
+    [ ${#wanted[*]} -eq 0 -o "${#searching[*]}" -eq 0 ] && return 1
+    __autoenv_log_debug "Wanted: ${wanted[*]}, Searching: ${searching[*]}"
+    for ((i=0; i<${#wanted[*]}; i++)); do
+        for ((j=0; j<${#searching[*]}; j++)); do
+            [ "${wanted[i]}" = "${searching[j]}" ] && return 0
+        done
     done
     return 1
 }
@@ -599,7 +712,7 @@ __autoenv_create() {
         return 1
     }
     # init the env
-    mkdir -p "$env_root/.autoenv/{vars,aliases,exit.d,init.d,run.d}" || {
+    mkdir -p "$env_root/.autoenv/{vars,aliases,exit.d,init.d,up.d}" || {
         __autoenv_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
     }
@@ -667,7 +780,7 @@ __autoenv_forget() {
         return 1
     }
     # deactivate and down it
-    __autoenv_in_list "$env_root" "${__AUTOENV_ENVS[@]}" && {
+    __autoenv_in_list "$env_root" -- "${__AUTOENV_ENVS[@]}" && {
         __autoenv_down "$env_root"
         __autoenv_exit "$env_root"
     }
@@ -758,9 +871,9 @@ __autoenv_edit() {
     # figure out which item to edit
     mkdir -p "$path" &>/dev/null
     new="+ (new $item_type)"
-    choices+=("$new")
     IFS=$'\n'
     choices=($(builtin cd "$path" && find . "${find_args[@]}" | sort | sed 's/^\.\///g'))
+    choices+=("$new")
     IFS="$origIFS"
     [ $# -eq 0 ] && {
         __autoenv_log "=== Editing $AUTOENV_ENV / $item_type ==="
@@ -775,8 +888,8 @@ __autoenv_edit() {
     }
     if [ "$choice" = "$new" ]; then
         add_exec=$needs_exec
-            do_reload=1
-            choice=$(__autoenv_prompt "Enter name of $item_type to create")
+        do_reload=1
+        choice=$(__autoenv_prompt "Enter name of $item_type to create")
         [ -n "$choice" ] || {
             echo "Aborting; no $item_type name given to create" >&2
             return 1
@@ -808,6 +921,7 @@ __autoenv_edit() {
 # use nohup and tie-off std{in/out/err} to execute each script in a subshell
 # runs '.autoenv/up.d/*' in alphabetical order
 __autoenv_up() {
+    # FIXME - daemons vs scripts
     local env_dir="$1"
     local up_dir="$env_dir/.autoenv/up.d"
     local script
@@ -839,6 +953,7 @@ __autoenv_up() {
 
 # sends a sig-kill to each .pid files in autoenv/up.d 
 __autoenv_down() {
+    # FIXME - daemons vs scripts
     local env_dir="$1"
     local up_dir="$env_dir/.autoenv/up.d"
     local script
@@ -878,28 +993,6 @@ __autoenv_down() {
 # $2..N = sync target names (e.g. for "GET $1/$2/index.autoenv")
 # $AUTOENV_SYNC_URL = env var to URL containing sync dirs w/ index.autoenv files
 __autoenv_sync() {
-    [ $# -eq 0 ] && {
-        cat <<EOI
-Usage: autoenv sync DIR NAME [NAME2]
-
-Sync files to the DIR given based on the target NAME(S). Requires you to set
-\$AUTOENV_SYNC_URL to a website that contains directories matching the NAME(S)
-given. Each directory must have an "index.autoenv" file generated by the
-"file-index" autoenv command. Uses 'curl' by default but falls back to 'wget'
-if curl is not installed.
-
-Examples:
-
-# generate a file index of favorite scripts or dev tools within a git repo
-[foo ~]$ cd ~/git/my-default-env/ && autoenv file-index bash python
-[foo ~/git/my-default-env]$ git add . && git commit -m 'blah blah' && git push
-
-# on another host, automatically initialize our bash stuff
-[bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
-[bar ~]$ autoenv sync . bash
-EOI
-        return 1
-    }
     local autoenv_dir="$1" && shift
     local sync_src="${AUTOENV_SYNC_URL:-}"
     [ -n "$sync_src" ] || {
@@ -1379,7 +1472,7 @@ __autoenv_scan() {
         if [ ${#found_envs[*]} -eq 0 ]; then
             __autoenv_exit "$env"
         else
-            __autoenv_in_list "$env" "${found_envs[@]}" \
+            __autoenv_in_list "$env" -- "${found_envs[@]}" \
                 || __autoenv_exit "$env"
         fi
     done
@@ -1390,7 +1483,7 @@ __autoenv_scan() {
         if [ ${#__AUTOENV_ENVS[*]} -eq 0 ]; then
             __autoenv_init "$env"
         else
-            __autoenv_in_list "$env" "${__AUTOENV_ENVS[@]}" \
+            __autoenv_in_list "$env" -- "${__AUTOENV_ENVS[@]}" \
                 || __autoenv_init "$env"
         fi
     done
@@ -1430,6 +1523,10 @@ __autoenv() {
             __autoenv_scan
             ;;
         create)
+            __autoenv_in_list "-h" "--help" -- "$@" || {
+                __autoenv_usage_help
+                return
+            }
             __autoenv_create "$@" || {
                 __autoenv_log_error "failed to create env $@"
                 return 1
@@ -1463,10 +1560,33 @@ __autoenv() {
             __autoenv_usage
             ;;
         sync)
+            [ $# -ge 1 ] || {
+                __autoenv_log_error "At least one sync name expected"
+                __autoenv_usage_sync
+                return 1
+            }
+            __autoenv_in_list "-h" "--help" -- "$@" || {
+                __autoenv_usage_sync
+                return
+            }
             [ ${#__AUTOENV_ENVS[*]} -gt 0 ] || {
                 __autoenv_log_error "Cannot perform sync without an active env"
+                __autoenv_usage_sync
+                return 1
             }
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
+            ;;
+        scan)
+            __autoenv_in_list "-h" "--help" -- "$@" || {
+                __autoenv_usage_scan
+                return
+            }
+            [ $# -ge 1 ] || {
+                __autoenv_log_error "No args expected"
+                __autoenv_usage_scan
+                return 1
+            }
+            __autoenv_scan
             ;;
         reload)
             # pop off one env at a time, starting at the end
@@ -1476,6 +1596,13 @@ __autoenv() {
             done
             # and initialize any found in the current dir (possibly less than we had before)
             __autoenv_scan
+            ;;
+        go)
+            [ $# -eq 1 ] || {
+                __autoenv_log_error "usage: go [-u|--up] NAME"
+                return 1
+            }
+            __autoenv_go "$@" || return 1
             ;;
         up)
             [ ${AUTOENV:-1} -ne 0 ] && \
@@ -1488,19 +1615,10 @@ __autoenv() {
         info)
             __autoenv_env_info
             ;;
-        sync)
-            [ $# -gt 0 ] || {
-                __autoenv_log_error "sync usage: NAME [NAME2]"
-                return 1
-            }
-            [ ${#__AUTOENV_ENVS[*]} -gt 0 ] || {
-                __autoenv_log_error "Cannot perform sync without an active env"
-            }
-            __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
-            ;;
         file-index)
             [ $# -gt 0 ] || {
                 __autoenv_log_error "file-index usage: DIR [DIR2]"
+                __autoenv_usage_file-index
                 return 1
             }
             __autoenv_file_index "$@"
