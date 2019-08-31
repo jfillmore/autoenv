@@ -1298,7 +1298,6 @@ __autoenv() {
             }
             __autoenv_go "$@" || return 1
             ;;
-            ;;
         help)
             __autoenv_usage
             ;;
