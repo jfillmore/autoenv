@@ -284,13 +284,13 @@ __autoenv_path_prepend_scripts() {
 }
 
 
-# return the depth a venv was found at; 1 based index
+# return the depth a venv was found at; 0 based index
 __autoenv_get_depth() {
     local autoenv_dir="$1"
     local i
     for ((i=0; i<${#__AUTOENV_ENVS[*]}; i++)); do
         [ "${__AUTOENV_ENVS[i]}" = "$autoenv_dir" ] && {
-            echo $((i+1))
+            echo $i
             return 0
         }
     done
@@ -949,7 +949,6 @@ lib_log_env_info() {
     items=()
     for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
         item="${__AUTOENV_ALIASES[i]}"
-        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
     [ ${#items[*]} -gt 0 ] && lib_log "  * ALIASES: $(lib_color lemon "${items[*]}")" '0;33;40'
 
@@ -1007,7 +1006,7 @@ __autoenv_go() {
 __autoenv_env_info() {
     local env_dir i
     [ "${#__AUTOENV_ENVS[*]}" -eq 0 ] && {
-        lib_log '++ no active envs'
+        lib_log '** no active envs' cyan
         return 0
     }
     # print each active env info
@@ -1035,7 +1034,7 @@ __autoenv_init() {
     # first look at the vars to initialize those ENV variables
     [ -d "$env_dir/.autoenv/vars" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/vars/"); do
-            __AUTOENV_VARS[${#__AUTOENV_VARS[*]}]="$depth:$name"
+            __AUTOENV_VARS+=("$depth:$name")
             # does a nested env have this same var defined?
             item="$(__autoenv_first_above "$name" "$depth" "${__AUTOENV_VARS[@]}")"
             [ -z "$item" ] \
@@ -1046,7 +1045,7 @@ __autoenv_init() {
     # aliases
     [ -d "$env_dir/.autoenv/aliases" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/aliases/"); do
-            __AUTOENV_ALIASES[${#__AUTOENV_ALIASES[*]}]="$depth:$name"
+            __AUTOENV_ALIASES+=("$depth:$name")
             # does a nested env have this same alias defined?
             item="$(__autoenv_first_above "$name" "$depth" "${__AUTOENV_ALIASES[@]}")"
             [ -z "$item" ] && alias "$name"="AUTOENV_PENV='$env_dir' $(<"$env_dir/.autoenv/aliases/$name")"
