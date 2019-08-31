@@ -22,8 +22,8 @@ lib_log_error() {
 }
 
 
-lib_log_short() {
-    local clr="${2:-0;33;40}"
+lib_log_raw() {
+    local clr="${2:-0;37;40}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
     echo -e "\033[${clr}m${1:-}\033[0;0;0m" >&2
 }
@@ -134,7 +134,7 @@ lib_prompt() {
                 }
             done
         else
-            matched_input="$(lib_match_one "$user_input" "$fuzzy_ignore" "${matches[@]}")"
+            matched_input="$(lib_match_one "$user_input" -i "$fuzzy_ignore" -- "${matches[@]}")"
             match_rv=$?
             if [ $match_rv -eq 0 ]; then
                 match="$matched_input"
@@ -153,36 +153,92 @@ lib_prompt() {
 }
 
 
+# returns 0 if >one< match for /^input/ is found and always prints the matched
+# values; otherwise returns 1 if none/error, or 2+ if multiple matched
+# $1    = input to search matches for
+# $2..n = params
+#   -i|--ignore CHARS    chars to ignore during matching
+#   -s|--shortest         allow multiple matches, but return the shortest one
+#   -f|--fuzzy           match anywhere within the string, not just prefix
+# --    = delimiter to start providing match values
+# $n... = match values
 lib_match_one() {
     [ $# -ge 3 ] || {
-        lib_log "at least three arguments expected to lib_match_one: input chars_to_ignore match_tmatch1 ... matchN"
+        lib_log_error "at least three arguments expected to lib_match_one: input chars_to_ignore match_tmatch1 ... matchN"
         return 1
     }
     local matches=()
-    local i cmd
-    local input="$1"; shift
-    local ignore="$1"; shift
-    local input_len=${#input}
-    local opts=("$@")
+    local i
+    local input=
+    local ignore=
+    local match_shortest=0
+    local match_fuzzy=0
+    local input_len=
+    local to_match=()
+    local best_match=
+    local match=
 
-    for ((i=0; i<${#opts[*]}; i++)); do
-        cmd=$(echo "${opts[i]}" | tr -d "$ignore")
-        [ -n "$cmd" ] || continue
-        # debug: echo "matching: '$input' = '${cmd:0:input_len}'" >&2
-        # TODO: add flags and support for matching inline anywhere vs prefix
-        #[ "${opt//$input}" != "$opt" ] && matches+=("$opt")
-        # TODO: if its an exact match, use it regardless of other options (e.g. "foo" matches "foo" but "foobar" and "foobard" also exist)
-        [ "$input" = "${cmd:0:input_len}" ] \
-            && matches[${#matches[*]}]="$cmd"
+    # collect params
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -f|--fuzzy)
+                match_fuzzy=1
+                ;;
+            -i|--ignore)
+                [ $# -ge 2 ] || {
+                    lib_log_error "missing parameter to lib_match_one -i|--ignore"
+                    return 1
+                }
+                ignore="$2"
+                shift
+                ;;
+            -s|--shortest)
+                match_shortest=1
+                ;;
+            --)
+                shift
+                to_match=("$@")
+                while [ $# -gt 1 ]; do shift; done
+                ;;
+            *)
+                [ -n "$input" ] && {
+                    lib_log_error "input of '$input' already given"
+                    return 1
+                }
+                input="$1"
+                input_len=${#input}
+            ;;
+        esac
+        shift
     done
-    [ "${#matches[*]}" -gt 0 ] && echo "${matches[@]}"
-    # debug: echo "matches: ${matches[@]}" >&2
-    if [ ${#matches[*]} -eq 0 ]; then
-        return 1
-    elif [ ${#matches[*]} -eq 1 ]; then
+
+    # collect matches
+    for ((i=0; i<${#to_match[*]}; i++)); do
+        match=$(echo "${to_match[i]}" | tr -d "$ignore")
+        [ -n "$match" ] || continue
+        if [ $match_fuzzy -eq 1 ]; then
+            [ "${match//$input}" != "$match" ] && matches+=("$match")
+        else
+            [ "$input" = "${match:0:input_len}" ] && matches+=("$match")
+        fi
+    done
+
+    # no matches? easy out
+    [ ${#matches[*]} -eq 0 ] && return 1
+    # print match(es) and proper retval
+    if [ $match_shortest -eq 1 ]; then
+        best_match="${matches[0]}"
+        for ((i=1; i<${#matches[*]}; i++)); do
+            match="${matches[i]}"
+            # the first seen shortest match wins
+            [ ${#match} -lt ${#best_match} ] && best_match="$match"
+        done
+        echo "$best_match"
         return 0
     else
-        return ${#matches[*]}
+        # print matches and hopefully it was just one
+        echo "${matches[@]}"
+        [ ${#matches[*]} -eq 1 ] && return 0 || return ${#matches[*]}
     fi
 }
 

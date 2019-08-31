@@ -23,7 +23,6 @@ __AUTOENV_CMDS=(
     go
     help
     info
-    ls
     reload
     run
     sync
@@ -67,7 +66,7 @@ fi
 
 __autoenv_usage() {
     lib_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
-    lib_log_short "
+    lib_log_raw "
 COMMANDS
 
 Command and argument names (except paths) can be abbreviated so long as only
@@ -75,14 +74,13 @@ one match is found.
 
   # generic
   help                     this info
-  info                     summarize active envs
+  info                     summarize known and active envs
   reload                   reinitialize all .envs; forgets removed envs, adds new envs
 
   # env management
   add PATH [NAME]          add existing env to memory for tracking
   create PATH [NAME]       create skeleton .autoenv dir and print usage hints
   edit [WHAT] [WHICH]      launch env editor, optionally for a specific thing
-  ls                       list known autoenv envs
   forget NAME              remove this env from memory; deactivate and down
 
   # env operations
@@ -93,13 +91,13 @@ one match is found.
   sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
 
 Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
-" grey
+"
 }
 
 
 __autoenv_usage_sync() {
     lib_log "Usage: autoenv sync SYNCNAME [SYNCNAME2]"
-    lib_log_short "
+    lib_log_raw "
 
 Sync files to the DIR given based on the target NAME(S). Requires you to set
 \$AUTOENV_SYNC_URL to a website that contains directories matching the
@@ -123,12 +121,12 @@ Examples:
   # on another host, automatically initialize our bash stuff
   [bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
   [bar ~]$ autoenv sync bash
-" grey
+"
 }
 
 __autoenv_usage_scan() {
     lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
-    lib_log_short "
+    lib_log_raw "
 
 SCAN (automatic on directory change by default)
 
@@ -155,60 +153,60 @@ Aliases and scripts in deeper nested envs take priority over parent envs. The
 deepest active venv will always have 'AUTOENV_ENV' pointing to the env
 directory, but aliases will also have 'AUTOENV_PENV' set to the specific env
 that is the parent of the alias definition.
-" grey
+"
 }
 
 
 __autoenv_usage_add() {
     lib_log "Usage: autoenv add [ENV_DIR] [ENV_NAME]"
-    lib_log_short "
+    lib_log_raw "
 
 Add tracking for the ENV_DIR (default: current directory) with the given ENV
 NAME (defaults to ENV_DIR/.name or basename ENV_DIR). Assumes that .autoenv/
 already exists in ENV_DIR.
 
 Tracking is added to $__AUTOENV_ROOT/envs/ using ENV_NAME.
-" grey
+"
 }
 
 
 __autoenv_usage_create() {
     lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
-    lib_log_short "
+    lib_log_raw "
 
 Create an env in the directory given (default: current directory) and with the
 name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
 to the ENV_DIR.
 
 Automatically creates '.autoenv/{vars,aliases,exit.d,init.d,up.d}/' in ENV_DIR.
-" grey
+"
 }
 
 
 __autoenv_usage_forget() {
     lib_log "Usage: autoenv forget [ENV_NAME]"
-    lib_log_short "
+    lib_log_raw "
 
 Forget about an env (e.g. remove tracking from $__AUTOENV_ROOT/envs/). Inverse
 of 'add'.
-" grey
+"
 }
 
 
 __autoenv_usage_file-index() {
     lib_log "Usage: autoenv file-index DIR [DIR2]"
-    lib_log_short "
-" grey
+    lib_log_raw "
+"
 }
 
 
 __autoenv_usage_edit() {
     lib_log "Usage: autoenv edit [WHAT] [WHICH]"
-    lib_log_short "
+    lib_log_raw "
 
 Edit active (based on depth) env, optionally specifying what/which things to
 edit. Allows partial matches as long as arguments are unambiguous.
-" grey
+"
 }
 
 
@@ -442,25 +440,6 @@ __autoenv_http_agent() {
 # main logic
 # ------------------------------------------------------------------------------
 
-
-# list the known envs
-__autoenv_ls_envs() {
-    local root_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
-    local i=0
-    local env_name env_root
-    [ -d "$root_env_dir" ] || {
-        lib_log "** no envs in '$root_env_dir'; use 'autoenv create [path]' to create one"
-        return
-    }
-    find "$root_env_dir" -type l -maxdepth 1 -mindepth 1 | sort | while read env_dir; do
-        let i+=1
-        env_name="$(basename "$env_dir")"
-        env_root="$(readlink "$env_dir")"
-        lib_log "** $i. env '$env_name' ($env_root)" '0;34;40'
-    done
-}
-
-
 # create a new env and print helpful usage info
 # $1 = root directory for the env (default .)
 # $2 = name of the env (default=dir basename)
@@ -587,7 +566,7 @@ __autoenv_edit() {
             "${env_opts[@]}"
         )"
     } || {
-        item_type=$(lib_match_one "$1" '()' "${env_opts[@]}") \
+        item_type=$(lib_match_one "$1" -i '()' -- "${env_opts[@]}") \
             || {
                 echo "Input '$1' failed to match at least exactly one of: ${env_opts[@]} (matched: '$item_type')" >&2
                 return 1
@@ -643,7 +622,7 @@ __autoenv_edit() {
         lib_log "=== Editing $AUTOENV_ENV / $item_type ==="
         choice=$(lib_prompt -b -f -m "Which $item_type? (save an empty file to delete)" "${choices[@]}")
     } || {
-        choice=$(lib_match_one "$1" '' "${choices[@]}") \
+        choice=$(lib_match_one "$1" -- "${choices[@]}") \
             || {
                 echo "Input '$1' failed to match at least one of: ${choices[@]} (matched: '$choice')" >&1
                 return 1
@@ -992,7 +971,7 @@ lib_log_env_info() {
 __autoenv_go() {
     local up=0
     local env_name=
-    local root_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
+    local root_envs="$__AUTOENV_ROOT/.autoenv/envs"
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -1004,17 +983,16 @@ __autoenv_go() {
                     lib_log_error "env name '$env_name' already given; invalid arg: $1"
                     return 1
                 }
-                # TODO: use lib_match_one when it supports exact matches winning despite multiple matches existing (e.g. "foo" matches "foo" but "foobar" and "foobard" also exist)
-                env_name="$1"
-                [ -L "$root_env_dir/$env_name" ] || {
-                    lib_log_error "unknown env: '$env_name'"
+                env_name=$(lib_match_one -s "$1" -- $(ls -1 "$root_envs"))
+                [ -L "$root_envs/$env_name" ] || {
+                    lib_log_error "unknown env: did you mean one of these? $env_name"
                     return 1
                 }
                 ;;
         esac
         shift
     done
-    cd $(readlink "$root_env_dir/$env_name") || {
+    cd $(readlink "$root_envs/$env_name") || {
         lib_log_error "Failed to \"cd '$env_name'\""
         return 1
     }
@@ -1032,6 +1010,7 @@ __autoenv_env_info() {
         return 0
     }
     # print each active env info
+    lib_log "[ ENVS: $(lib_color lightcyan "$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")")]" '4;36;40'
     for ((i=0; i<${#__AUTOENV_ENVS[*]}; i++)); do
         env_dir="${__AUTOENV_ENVS[i]}"
         lib_log_env_info $i
@@ -1263,15 +1242,15 @@ __autoenv() {
         __autoenv_usage
         return 2
     }
-    cmd=$(lib_match_one "$1" '' "${__AUTOENV_CMDS[@]}")
+    cmd=$(lib_match_one "$1" -- "${__AUTOENV_CMDS[@]}")
     retval=$?
     # if retval was 1 its a mismatch, so fail out
     [ $retval -ge 1 ] && {
         __autoenv_usage
         [ $retval -eq 1 ] \
-            && echo "ERROR: No autoenv commands matched '$1'" >&2
+            && lib_log_error "ERROR: No autoenv commands matched '$1'"
         [ $retval -gt 1 ] \
-            && echo "ERROR: Multiple autoenv commands matched '$1': $cmd" >&2
+            && lib_log_error "ERROR: Multiple autoenv commands matched '$1': $cmd"
         return $retval
     }
     shift
@@ -1314,12 +1293,11 @@ __autoenv() {
         go)
             [ $# -eq 1 ] || {
                 lib_log_error "usage: go [-u|--up] NAME"
+                lib_log_raw "ENVS: $(lib_color lightcyan "$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")")" cyan
                 return 1
             }
             __autoenv_go "$@" || return 1
             ;;
-        ls)
-            __autoenv_ls_envs
             ;;
         help)
             __autoenv_usage
@@ -1435,8 +1413,6 @@ cd() {
 
 alias autoenv=__autoenv
 alias ae=__autoenv
-if [ $# -eq 0 ]; then
-    __autoenv_scan
-else
-    __autoenv "$@"
-fi
+
+__autoenv_scan &>/dev/null
+__autoenv_env_info
