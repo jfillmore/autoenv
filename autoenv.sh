@@ -7,20 +7,13 @@
 # - aliases requiring confirmation (e.g. aliases-confirm/ or special invoke method)
 
 
-# main vars of interest
+# --- main internals --
 __AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached; 
-# trim slash
-[ "${__AUTOENV_ROOT:${#__AUTOENV_ROOT}-1}" = '/' ] \
-    && __AUTOENV_ROOT="${__AUTOENV_ROOT:0:${#__AUTOENV_ROOT}-1}"
-
-# our internals
 __AUTOENV_ENVS=()  # list of active envs
 __AUTOENV_VARS=()  # names of environmental variables we set; named are prefixed with the env depth they were applied at
 __AUTOENV_ALIASES=()  # names of aliases we created; named are prefixed with the env depth they were applied at
 
 __AUTOENV_SCAN_DEPTH=${AUTOENV_DEPTH:-16}  # how far up to scan at most
-__AUTOENV_TAG="æ"
-# used for quick command typing and validation
 __AUTOENV_CMDS=(
     add
     create
@@ -35,17 +28,46 @@ __AUTOENV_CMDS=(
     run
     sync
 )
+# trim slash, if needed
+[ "${__AUTOENV_ROOT:${#__AUTOENV_ROOT}-1}" = '/' ] \
+    && __AUTOENV_ROOT="${__AUTOENV_ROOT:0:${#__AUTOENV_ROOT}-1}"
 
-# other key env vars:
+
+# -- other key env vars --
 AUTOENV=${AUTOENV:-1}
 AUTOENV_DEBUG="${AUTOENV_DEBUG:-0}"
 AUTOENV_ENV=
 AUTOENV_PENV=
 
 
+# helper library; find it either by:
+# 1 - same dir as autoenv.sh script/link
+# 2 - if we're a symlink, then in the actual location of this script
+__AUTOENV_TAG="æ"
+if [ -f "$(dirname ${BASH_SOURCE[0]})/lib.sh" ]; then
+    . "$(dirname ${BASH_SOURCE[0]})/lib.sh" "$__AUTOENV_TAG" || {
+        echo "Failed to source lib.sh from script dir" >&2
+        return 1
+    }
+elif [ -f "$(dirname $(readlink ${BASH_SOURCE[0]}))/lib.sh" ]; then
+    . "$(dirname $(readlink ${BASH_SOURCE[0]}))/lib.sh" "$__AUTOENV_TAG" || {
+        echo "Failed to source lib.sh from symlink dir" >&2
+        return 1
+    }
+else
+    echo "Unable to find lib.sh in $(dirname ${BASH_SOURCE[0]})/ or $(dirname $(readlink ${BASH_SOURCE[0]}))" >&2
+    return 1
+fi
+
+
+
+# ------------------------------------------------------------------------------
+# usage info
+# ------------------------------------------------------------------------------
+
 __autoenv_usage() {
-    __autoenv_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
-    __autoenv_log_short "
+    lib_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
+    lib_log_short "
 COMMANDS
 
 Command and argument names (except paths) can be abbreviated so long as only
@@ -71,13 +93,13 @@ one match is found.
   sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
 
 Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
-"
+" grey
 }
 
 
 __autoenv_usage_sync() {
-    __autoenv_log "Usage: autoenv sync SYNCNAME [SYNCNAME2]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv sync SYNCNAME [SYNCNAME2]"
+    lib_log_short "
 
 Sync files to the DIR given based on the target NAME(S). Requires you to set
 \$AUTOENV_SYNC_URL to a website that contains directories matching the
@@ -101,12 +123,12 @@ Examples:
   # on another host, automatically initialize our bash stuff
   [bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
   [bar ~]$ autoenv sync bash
-"
+" grey
 }
 
 __autoenv_usage_scan() {
-    __autoenv_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
+    lib_log_short "
 
 SCAN (automatic on directory change by default)
 
@@ -133,60 +155,60 @@ Aliases and scripts in deeper nested envs take priority over parent envs. The
 deepest active venv will always have 'AUTOENV_ENV' pointing to the env
 directory, but aliases will also have 'AUTOENV_PENV' set to the specific env
 that is the parent of the alias definition.
-"
+" grey
 }
 
 
 __autoenv_usage_add() {
-    __autoenv_log "Usage: autoenv add [ENV_DIR] [ENV_NAME]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv add [ENV_DIR] [ENV_NAME]"
+    lib_log_short "
 
 Add tracking for the ENV_DIR (default: current directory) with the given ENV
 NAME (defaults to ENV_DIR/.name or basename ENV_DIR). Assumes that .autoenv/
 already exists in ENV_DIR.
 
 Tracking is added to $__AUTOENV_ROOT/envs/ using ENV_NAME.
-"
+" grey
 }
 
 
 __autoenv_usage_create() {
-    __autoenv_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
+    lib_log_short "
 
 Create an env in the directory given (default: current directory) and with the
 name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
 to the ENV_DIR.
 
 Automatically creates '.autoenv/{vars,aliases,exit.d,init.d,up.d}/' in ENV_DIR.
-"
+" grey
 }
 
 
 __autoenv_usage_forget() {
-    __autoenv_log "Usage: autoenv forget [ENV_NAME]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv forget [ENV_NAME]"
+    lib_log_short "
 
 Forget about an env (e.g. remove tracking from $__AUTOENV_ROOT/envs/). Inverse
 of 'add'.
-"
+" grey
 }
 
 
 __autoenv_usage_file-index() {
-    __autoenv_log "Usage: autoenv file-index DIR [DIR2]"
-    __autoenv_log_short "
-"
+    lib_log "Usage: autoenv file-index DIR [DIR2]"
+    lib_log_short "
+" grey
 }
 
 
 __autoenv_usage_edit() {
-    __autoenv_log "Usage: autoenv edit [WHAT] [WHICH]"
-    __autoenv_log_short "
+    lib_log "Usage: autoenv edit [WHAT] [WHICH]"
+    lib_log_short "
 
 Edit active (based on depth) env, optionally specifying what/which things to
 edit. Allows partial matches as long as arguments are unambiguous.
-"
+" grey
 }
 
 
@@ -194,187 +216,19 @@ edit. Allows partial matches as long as arguments are unambiguous.
 # helpers
 # ------------------------------------------------------------------------------
 
-__autoenv_log() {
-    local color="${2:-0;34;40}"
-    echo -e "\033[1;30;40m# ($__AUTOENV_TAG) \033[${color}m${1:-}\033[0;0;0m" >&2
-}
 
-__autoenv_log_error() {
-    local color="${2:-0;31;40}"
-    local error_label="${3:-error}"
-    echo -e "\033[1;31;40m# ($__AUTOENV_TAG $error_label) \033[${color}m${1:-}\033[0;0;0m" >&2
-}
-
-__autoenv_log_debug() {
+# log an internal debugging message
+# $1 = log message
+# $2 = optional color to use; e.g. '1;35;40'
+__autoenv_debug() {
     [ ${AUTOENV_DEBUG:-0} = 1 ] || return 0
     local color="${2:-1;35;40}"
     echo -e "\033[0;35;40m# ($__AUTOENV_TAG debug) \033[${color}m${1:-}\033[0;0;0m" >&2
 }
 
-__autoenv_log_short() {
-    local color="${2:-0;33;40}"
-    echo -e "\033[${color}m${1:-}\033[0;0;0m" >&2
-}
-
-__autoenv_prompt() {
-    # echo back user input, optionally after validating it
-    # $1  = prompt to give
-    # $2+ = -$a|--$arg OR valid matches to enforce, if any
-    # args:
-    # -m|--menu, -f*|--fuzzy*, -n|--numchars X, -b|--break
-    local errors
-    local fuzzy_ignore
-    local fuzzy_match=0
-    local i
-    local line_break=''
-    local match=
-    local match_rv
-    local matched_input
-    local matches=()
-    local msg=
-    local num_chars=0
-    local opts=
-    local opts_msg=
-    local read_args=()
-    local show_menu=0
-    local silent=0
-    local user_input
-
-    # gatcher up matches for the prompt and validation later
-    while [ $# -gt 0 ]; do
-        if [ "${1:0:1}" = '-' ]; then
-            case "$1" in
-                -b|--break):
-                    line_break="\n"
-                    ;;
-                -f*|--fuzzy*)
-                    fuzzy_match=1
-                    # if we're followed by some chars then those are ones we ignore
-                    [ "${1:0:2}" == '--' ] \
-                        && fuzzy_ignore="${1:7}" \
-                        || fuzzy_ignore="${1:2}"
-                    ;;
-                -m|--menu)
-                    show_menu=1
-                    ;;
-                -n|--numchars)
-                    [ $# -ge 2 ] || {
-                        echo "Missing __autoenv_prompt arg to -n|numchars"
-                        return 1
-                    }
-                    num_chars=$2
-                    shift
-                    ;;
-                -s|--silent)
-                    silent=1
-                    ;;
-                *)
-                    echo "Unknown __autoenv_prompt arg: $1" >&2
-                    return 1
-                    ;;
-            esac
-        else
-            [ -z "$msg" ] \
-                && msg="$1" \
-                || {
-                    [ -n "$1" ] && matches+=("$1")
-                }
-        fi
-        shift
-    done
-    [ ${#matches[*]} -gt 0 ] && {
-        [ $show_menu -eq 0 ] \
-            && opts=" (${matches[0]}" \
-            || opts="\n  * ${matches[0]}"
-        for ((i=1; i<${#matches[*]}; i++)); do
-            [ $show_menu -eq 0 ] \
-                && opts="$opts|${matches[$i]}" \
-                || opts="$opts\n  * ${matches[$i]}"
-        done
-        [ $show_menu -eq 0 ] && opts="$opts)"
-    }
-    [ $fuzzy_match -eq 1 -a ${#matches[*]} -eq 0 ] && {
-        echo "__autoenv_prompt error: You must provide matches to use --fuzzy" >&2
-        return 1
-    }
-    [ $silent -eq 1 ] && read_args+=(-s)
-    [ $num_chars != '0' ] && read_args+=(-n $num_chars)
-    # read and optionally validate the input until we get something right
-    [ $fuzzy_match -eq 1 ] && opts_msg=" (prefix match allowed)"
-    [ $show_menu -eq 0 ] \
-        && msg="$msg$opts_msg$opts" \
-        || msg="Options$opts_msg:\033[1;34;40m$opts\033[0;0m\n$msg"
-    while [ -z "$match" ]; do
-        error=
-        echo -en "$line_break$msg > " >&2
-        if [ "${#read_args[*]}" -eq 0 ]; then
-            read user_input
-        else
-            read "${read_args[@]}" user_input
-        fi
-        [ $num_chars -gt 0 -o $silent -eq 1 ] && echo >&2
-        if [ $fuzzy_match -eq 0 ]; then
-            for ((i=0; i<${#matches[*]}; i++)); do
-                [ "$user_input" = "${matches[i]}" ] && {
-                    match="$user_input"
-                    break
-                }
-            done
-        else
-            matched_input="$(__autoenv_match_one "$user_input" "$fuzzy_ignore" "${matches[@]}")"
-            match_rv=$?
-            if [ $match_rv -eq 0 ]; then
-                match="$matched_input"
-                break
-            elif [ $match_rv -eq 1 ]; then
-                error="no valid option found for '$user_input'" >&2
-            else
-                error="multiple matches found for '$user_input': ${matched_input:0:92}..." >&2
-            fi
-        fi
-        [ ${#matches[*]} -eq 0 ] && match="$user_input"
-        [ ${#match} -eq 0 ] \
-            && echo -e "\nPlease try again: $error\n" >&2
-    done
-    echo "$match"
-}
-
-
-__autoenv_match_one() {
-    [ $# -ge 3 ] || {
-        __autoenv_log "at least three arguments expected to __autoenv_match_one: input chars_to_ignore match_tmatch1 ... matchN"
-        return 1
-    }
-    local matches=()
-    local i cmd
-    local input="$1"; shift
-    local ignore="$1"; shift
-    local input_len=${#input}
-    local opts=("$@")
-
-    for ((i=0; i<${#opts[*]}; i++)); do
-        cmd=$(echo "${opts[i]}" | tr -d "$ignore")
-        [ -n "$cmd" ] || continue
-        # debug: echo "matching: '$input' = '${cmd:0:input_len}'" >&2
-        # TODO: add flags and support for matching inline anywhere vs prefix
-        #[ "${opt//$input}" != "$opt" ] && matches+=("$opt")
-        # TODO: if its an exact match, use it regardless of other options (e.g. "foo" matches "foo" but "foobar" and "foobard" also exist)
-        [ "$input" = "${cmd:0:input_len}" ] \
-            && matches[${#matches[*]}]="$cmd"
-    done
-    [ "${#matches[*]}" -gt 0 ] && echo "${matches[@]}"
-    # debug: echo "matches: ${matches[@]}" >&2
-    if [ ${#matches[*]} -eq 0 ]; then
-        return 1
-    elif [ ${#matches[*]} -eq 1 ]; then
-        return 0
-    else
-        return ${#matches[*]}
-    fi
-}
-
 
 # look at each path in the envs and return 0 if found, 1 if not
+# $1 = autoenv dir to check (e.g. "$HOME/code/proj_x")
 __autoenv_is_active() {
     local autoenv_dir="$1"
     local i
@@ -385,42 +239,9 @@ __autoenv_is_active() {
 }
 
 
-# return 0 if any args prior to -- are found the rest of the args
-# e.g.:
-# 1) __autoenv_in_list foo bar -- at the bar && echo "saw foo|bar"
-# 2) __autoenv_in_list foo bar -- at the food bard || echo "did not see foo|bar"
-__autoenv_in_list() {
-    local wanted=()
-    local searching=()
-    local pivot=0
-    local i j
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --)
-                pivot=1
-                ;;
-            *)
-                [ $pivot -eq 0 ] \
-                    && wanted+=("$1") \
-                    || searching+=("$1")
-        esac
-        shift
-    done
-    [ ${#wanted[*]} -eq 0 -o "${#searching[*]}" -eq 0 ] && return 1
-    __autoenv_log_debug "Wanted: ${wanted[*]}, Searching: ${searching[*]}"
-    for ((i=0; i<${#wanted[*]}; i++)); do
-        for ((j=0; j<${#searching[*]}; j++)); do
-            [ "${wanted[i]}" = "${searching[j]}" ] && return 0
-        done
-    done
-    return 1
-}
-
-
 # replace or trim an entry in $PATH
-# $0 = path to match
-# $1 = optional replacement to make; prunes path otherwise
+# $1 = path to match
+# $2 = optional replacement to make; prunes path otherwise
 __autoenv_path_swap() {
     local tmp_path=":$PATH:"
     [ $# -eq 2 ] \
@@ -443,7 +264,7 @@ __autoenv_path_prepend_scripts() {
     local i
     # if we're at min depth, just append to PATH since we know we're last
     if [ $depth -eq 1 ]; then
-        __autoenv_log_debug "appending first env ($new_path) to \$PATH"
+        __autoenv_debug "appending first env ($new_path) to \$PATH"
         PATH="$PATH:$new_path"
         return 0
     fi
@@ -452,7 +273,7 @@ __autoenv_path_prepend_scripts() {
     for ((i=$depth-1; i>0; i--)); do
         parent_env="${__AUTOENV_ENVS[$i-1]}"
         [ -d "$parent_env/.autoenv/scripts" ] && {
-            __autoenv_log_debug "adding $new_path to \$PATH before '$parent_env'"
+            __autoenv_debug "adding $new_path to \$PATH before '$parent_env'"
             __autoenv_path_swap \
                 "$parent_env/.autoenv/scripts" \
                 "$new_path:$parent_env/.autoenv/scripts"
@@ -460,7 +281,7 @@ __autoenv_path_prepend_scripts() {
         }
     done
     # no parents had a scripts dir
-    __autoenv_log_debug "appending $new_path (first child w/ scripts)"
+    __autoenv_debug "appending $new_path (first child w/ scripts)"
     PATH="$PATH:$new_path"
 }
 
@@ -517,7 +338,7 @@ __autoenv_rem_env() {
             || active_envs[${#active_envs[*]}]="$env"
     done
     [ $found_env -eq 1 ] || {
-        __autoenv_log_error "cannot remove env '$autoenv_dir'; not found in list of envs"
+        lib_log_error "cannot remove env '$autoenv_dir'; not found in list of envs"
         return 1
     }
     [ ${#active_envs[*]} -gt 0 ] \
@@ -590,63 +411,6 @@ __autoenv_depth() {
 }
 
 
-# get the index position for an item in a string list
-# returns an empty string and  non-0 if not found
-# $1=list string
-# $2=item to search for
-# $3=delimiter (optional)
-__autoenv_list_index() {
-    local list="$1"
-    local search="$2"
-    local sep="${3:-:}"
-    local i=0
-    local item
-    (
-        IFS="$sep"
-        for item in $list; do
-            [ "$item" = "$search" ] && {
-                echo $i
-                exit 0
-            }
-            let i+=1
-        done
-        exit 1
-    )
-    return $?
-}
-
-
-# update a list with a new item at the position specified
-# $1=list
-# $2=item to insert
-# $3=position to insert at (default: last)
-# $4=delimiter (optional)
-__autoenv_list_update() {
-    local list="$1"
-    local insert="$2"
-    local pos="{$3:-}"
-    local sep="${$4:-:}"
-    local final_list=''
-    local item
-    local origIFS="$IFS"
-    IFS="$sep"
-    for item in $list; do
-        [ $i -eq $pos ] && {
-            [ $i -eq 0 ] \
-                && final_list="$insert$sep$item" \
-                || final_list="$final_list$sep$insert$sep$item"
-        } || {
-            [ $i -eq 0 ] \
-                && final_list="$item" \
-                || final_list="$final_list$sep$item"
-        }
-        let i+=1
-    done
-    IFS="$origIFS"
-    echo "$final_list"
-}
-
-
 # echos curl or wget w/ default args to assist with HTTP requests
 __autoenv_http_agent() {
     local agent https
@@ -664,7 +428,7 @@ __autoenv_http_agent() {
     else
         # no curl? how about wget?
         agent=$(which wget) || {
-            __autoenv_log "Unable to locate 'curl' or 'wget' to download files."
+            lib_log "Unable to locate 'curl' or 'wget' to download files."
             return 1
         }
         agent="$agent --quiet -O -"
@@ -685,14 +449,14 @@ __autoenv_ls_envs() {
     local i=0
     local env_name env_root
     [ -d "$root_env_dir" ] || {
-        __autoenv_log "** no envs in '$root_env_dir'; use 'autoenv create [path]' to create one"
+        lib_log "** no envs in '$root_env_dir'; use 'autoenv create [path]' to create one"
         return
     }
     find "$root_env_dir" -type l -maxdepth 1 -mindepth 1 | sort | while read env_dir; do
         let i+=1
         env_name="$(basename "$env_dir")"
         env_root="$(readlink "$env_dir")"
-        __autoenv_log "** $i. env '$env_name' ($env_root)" '0;34;40'
+        lib_log "** $i. env '$env_name' ($env_root)" '0;34;40'
     done
 }
 
@@ -708,20 +472,20 @@ __autoenv_create() {
     [ -n "$env_name" ] || env_name=$(basename $(builtin cd "$env_root" && pwd -P))
     # avoid dupe names
     [ -L "$root_env_dir/envs/$env_name" ] && {
-        __autoenv_log_error "An env named '$env_name' already exists (env=$(readlink \"$root_env_dir/envs/$env_name\" 2>/dev/null))"
+        lib_log_error "An env named '$env_name' already exists (env=$(readlink \"$root_env_dir/envs/$env_name\" 2>/dev/null))"
         return 1
     }
     # init the env
     mkdir -p "$env_root/.autoenv/{vars,aliases,exit.d,init.d,up.d}" || {
-        __autoenv_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
+        lib_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
     }
     __autoenv_add "$env_root" "$env_name" || return 1
 
     # let the user know about it
-    __autoenv_log "** created env '$env_name'" '1;32;40'
-    __autoenv_log "  - tracked at: '$root_env_dir/envs/$env_name'" '1;32;40'
-    __autoenv_log "** run 'autoenv edit [what] [which]' to customize" '1;32;40'
+    lib_log "** created env '$env_name'" '1;32;40'
+    lib_log "  - tracked at: '$root_env_dir/envs/$env_name'" '1;32;40'
+    lib_log "** run 'autoenv edit [what] [which]' to customize" '1;32;40'
 }
 
 
@@ -735,7 +499,7 @@ __autoenv_add() {
 
     # always ensure our root autoenv is setup
     mkdir -p "$root_env_dir" || {
-        __autoenv_log_error "Failed to create '$root_env_dir'"
+        lib_log_error "Failed to create '$root_env_dir'"
         return 1
     }
     # normalize the name and get a full path
@@ -747,19 +511,19 @@ __autoenv_add() {
             || env_name=$(basename "$env_root")
     }
     [ -d "$env_root/.autoenv" ] || {
-        __autoenv_log_error "No .autoenv/ dir found in '$env_root' to add"
+        lib_log_error "No .autoenv/ dir found in '$env_root' to add"
         return 1
     }
     [ -L "$root_env_dir/envs/$env_name" ] && {
-        __autoenv_log_error "An env named '$env_name' already exists (env=$(readlink \"$root_env_dir/envs/$env_name\" 2>/dev/null))"
+        lib_log_error "An env named '$env_name' already exists (env=$(readlink \"$root_env_dir/envs/$env_name\" 2>/dev/null))"
         return 1
     }
     echo "$env_name" > "$env_root/.autoenv/.name" || {
-        __autoenv_log_error "Failed to set '$env_root' name to '$env_name'"
+        lib_log_error "Failed to set '$env_root' name to '$env_name'"
         return 1
     }
     ln -s "$env_root" "$root_env_dir/$env_name" || {
-        __autoenv_log_error "Failed to link '$env_root' > '$root_env_dir/$env_name' to add env '$env_name'"
+        lib_log_error "Failed to link '$env_root' > '$root_env_dir/$env_name' to add env '$env_name'"
         return 1
     }
 }
@@ -771,16 +535,16 @@ __autoenv_forget() {
     local env_root
     local root_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
     [ -d "$root_env_dir/$env_name" ] || {
-        __autoenv_log_error "No env known by name '$env_name'"
+        lib_log_error "No env known by name '$env_name'"
         return 1
     }
     env_root=$(readlink "$root_env_dir/$env_name")
     rm "$root_env_dir/$env_name" || {
-        __autoenv_log_error "Failed remove link '$root_env_dir/$env_name'"
+        lib_log_error "Failed remove link '$root_env_dir/$env_name'"
         return 1
     }
     # deactivate and down it
-    __autoenv_in_list "$env_root" -- "${__AUTOENV_ENVS[@]}" && {
+    lib_in_list "$env_root" -- "${__AUTOENV_ENVS[@]}" && {
         __autoenv_down "$env_root"
         __autoenv_exit "$env_root"
     }
@@ -817,13 +581,13 @@ __autoenv_edit() {
 
     # determine what type of thing to edit
     [ $# -eq 0 ] && {
-        __autoenv_log "=== Editing $AUTOENV_ENV ==="
+        lib_log "=== Editing $AUTOENV_ENV ==="
         item_type="$(
-            __autoenv_prompt -f'()' -n 1 -m "Please choose what to edit" \
+            lib_prompt -f'()' -n 1 -m "Please choose what to edit" \
             "${env_opts[@]}"
         )"
     } || {
-        item_type=$(__autoenv_match_one "$1" '()' "${env_opts[@]}") \
+        item_type=$(lib_match_one "$1" '()' "${env_opts[@]}") \
             || {
                 echo "Input '$1' failed to match at least exactly one of: ${env_opts[@]} (matched: '$item_type')" >&2
                 return 1
@@ -876,10 +640,10 @@ __autoenv_edit() {
     choices+=("$new")
     IFS="$origIFS"
     [ $# -eq 0 ] && {
-        __autoenv_log "=== Editing $AUTOENV_ENV / $item_type ==="
-        choice=$(__autoenv_prompt -b -f -m "Which $item_type? (save an empty file to delete)" "${choices[@]}")
+        lib_log "=== Editing $AUTOENV_ENV / $item_type ==="
+        choice=$(lib_prompt -b -f -m "Which $item_type? (save an empty file to delete)" "${choices[@]}")
     } || {
-        choice=$(__autoenv_match_one "$1" '' "${choices[@]}") \
+        choice=$(lib_match_one "$1" '' "${choices[@]}") \
             || {
                 echo "Input '$1' failed to match at least one of: ${choices[@]} (matched: '$choice')" >&1
                 return 1
@@ -889,7 +653,7 @@ __autoenv_edit() {
     if [ "$choice" = "$new" ]; then
         add_exec=$needs_exec
         do_reload=1
-        choice=$(__autoenv_prompt "Enter name of $item_type to create")
+        choice=$(lib_prompt "Enter name of $item_type to create")
         [ -n "$choice" ] || {
             echo "Aborting; no $item_type name given to create" >&2
             return 1
@@ -903,7 +667,7 @@ __autoenv_edit() {
         # look for post-edit adjustments (e.g. delete empty stuff, add exec perms)
         if [ \! -s "$path/$choice" ]; then
             rm -f "$path/$choice"
-            __autoenv_log "Deleting empty $item_type" >&2
+            lib_log "Deleting empty $item_type" >&2
         elif [ $add_exec -eq 1 ]; then
             chmod u+x "$path/$choice" || {
                 echo "Failed to add executions perms to '$path/$choice'" >&2
@@ -934,16 +698,16 @@ __autoenv_up() {
         | while read script; do
             pid_file="$up_dir/.$script.pid"
             [ -s "$pid_file" ] && {
-                __autoenv_log "PID file already exists for $script: $(<"$pid_file")"
+                lib_log "PID file already exists for $script: $(<"$pid_file")"
                 exit 1
             }
             ( 
                 cd "$env_dir" || exit 1
                 AUTOENV_ENV="$env_dir" nohup "$script" &>/dev/null </dev/null &
                 echo $! >> "$pid_file"
-                __autoenv_log "started: $script"
+                lib_log "started: $script"
                 wait
-                __autoenv_log "ended: $script (retval=$?, pid=$(<"$pid_file"))"
+                lib_log "ended: $script (retval=$?, pid=$(<"$pid_file"))"
                 rm "$pid_file"
             ) &
         done
@@ -967,11 +731,11 @@ __autoenv_down() {
             pid=$(<"$pid_file")
             # clean up crashed PIDs
             ps -p "$pid" &>/dev/null || {
-                __autoenv_log_error "No active PID running: $pid; clearing .pid file"
-                rm "$pid_file" || __autoenv_log_error "Failed to remove PID file: $pid_file"
+                lib_log_error "No active PID running: $pid; clearing .pid file"
+                rm "$pid_file" || lib_log_error "Failed to remove PID file: $pid_file"
                 continue
             }
-            __autoenv_log_debug "Killing $pid from $pid_file"
+            __autoenv_debug "Killing $pid from $pid_file"
             kill "$pid"
 
             # ensure it shutsdown clean (and timely)
@@ -981,7 +745,7 @@ __autoenv_down() {
                 let i+=1
             done
             [ $i -ge 10 ] && {
-                __autoenv_log_error "Failed to kill $pid after 10 seconds; maybe run: kill -9 $pid"
+                lib_log_error "Failed to kill $pid after 10 seconds; maybe run: kill -9 $pid"
             }
         done
     return 0
@@ -996,14 +760,14 @@ __autoenv_sync() {
     local autoenv_dir="$1" && shift
     local sync_src="${AUTOENV_SYNC_URL:-}"
     [ -n "$sync_src" ] || {
-        __autoenv_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories." 
+        lib_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories." 
         return 1
     }
     local http=$(__autoenv_http_agent) || return 1
     shasum="$(which shasum 2>/dev/null) -a 1" \
         || shasum=$(which sha1sum 2>/dev/null) \
         || {
-            __autoenv_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
+            lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
             return 1
         }
     # do everything in subshells to minimize env polution
@@ -1011,49 +775,49 @@ __autoenv_sync() {
     local target base_dir file_name exec_bit checksum path tmp_path \
         new_checksum old_checksum preview_lines file_changed
     cd "$autoenv_dir" || {
-        __autoenv_log "Failed to change to sync directory '$HOME'."
+        lib_log "Failed to change to sync directory '$HOME'."
         exit 1
     }
     # for each target download the autoenv index and listed files
     while [ $# -gt 0 ]; do
         target="$1" && shift
-        __autoenv_log_debug "Downloading index list for '$target'"
+        __autoenv_debug "Downloading index list for '$target'"
         # download all the files listed
         $http "$sync_src/$target/index.autoenv" | while read exec_bit checksum path; do
-            __autoenv_log_debug "fetching file '$path'"
+            __autoenv_debug "fetching file '$path'"
             # normalize the path to clean extra slashes, preceding periods
             path=$(echo $path | sed 's#//*#/#g' | sed 's#^\./##')
             base_dir=$(dirname "$path") || {
-                __autoenv_log_error "Failed to get base directory of '$path'."
+                lib_log_error "Failed to get base directory of '$path'."
                 exit 1
             }
             file_name=$(basename "$path") || {
-                __autoenv_log_error "Failed to get file name of '$path'."
+                lib_log_error "Failed to get file name of '$path'."
                 exit 1
             }
             tmp_path="$base_dir/.$file_name.autoenv-sync.$$"
             "$http" "$sync_src/$target/$path" > "$tmp_path" \
                 || {
                     rm "$tmp_path" &>/dev/null
-                    __autoenv_log_error "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
+                    lib_log_error "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
                     exit 1
                 }
             # does the checksum match?
             new_checksum=$($shasum "$tmp_path" | awk '{print $1}') \
                 || {
-                    __autoenv_log_error "Failed to generate checksum for '$path'."
+                    lib_log_error "Failed to generate checksum for '$path'."
                     exit 1
                 }
             if [ "$new_checksum" != "$checksum" ]; then
                 preview_lines=6
-                __autoenv_log_debug "-- File checksum mismatch (first $preview_lines lines)"
-                __autoenv_log_debug "------------------------------------------"
-                head -n $preview_lines "$tmp_path" | __autoenv_log_debug
-                __autoenv_log_debug "------------------------------------------"
+                __autoenv_debug "-- File checksum mismatch (first $preview_lines lines)"
+                __autoenv_debug "------------------------------------------"
+                head -n $preview_lines "$tmp_path" | __autoenv_debug
+                __autoenv_debug "------------------------------------------"
                 # file failed to download... odd. Permissions/misconfig, perhaps?
                 {
                     rm "$tmp_path" &>/dev/null
-                    __autoenv_log_error "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
+                    lib_log_error "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
                     exit 1
                 }
             fi
@@ -1063,11 +827,11 @@ __autoenv_sync() {
                 old_checksum=$($shasum "$base_dir/$file_name" | awk '{print $1}') \
                     || {
                         rm "$tmp_path" &>/dev/null
-                        __autoenv_log_error "Failed to generate checksum for existing copy of '$path'."
+                        lib_log_error "Failed to generate checksum for existing copy of '$path'."
                         exit 1
                     }
                 if [ "$old_checksum" = "$checksum" ]; then
-                    __autoenv_log_debug "-- skipping unchanged file"
+                    __autoenv_debug "-- skipping unchanged file"
                     file_changed=0
                 fi
                 # regardless if the file changed make sure the exec bit is set right
@@ -1075,11 +839,11 @@ __autoenv_sync() {
                     -a $exec_bit = '1' \
                     -a ! -x "$base_dir/$file_name" \
                     ]; then
-                    __autoenv_log_debug "-- toggling execution bit"
+                    __autoenv_debug "-- toggling execution bit"
                     chmod u+x "$base_dir/$file_name" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            __autoenv_log_error "Failed to chmod 'u+x' file '$base_dir/$file_name'."
+                            lib_log_error "Failed to chmod 'u+x' file '$base_dir/$file_name'."
                             exit 1
                         }
                 fi
@@ -1087,11 +851,11 @@ __autoenv_sync() {
             if [ $file_changed -eq 1 ]; then
                 # was this a script?
                 if [ $exec_bit = '1' ]; then
-                    __autoenv_log_debug "-- toggling execution bit"
+                    __autoenv_debug "-- toggling execution bit"
                     chmod u+x "$tmp_path" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            __autoenv_log_error "Failed to chmod 'u+x' file '$tmp_path'."
+                            lib_log_error "Failed to chmod 'u+x' file '$tmp_path'."
                             exit 1
                         }
                 fi
@@ -1100,14 +864,14 @@ __autoenv_sync() {
                     mkdir -p "$base_dir" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            __autoenv_log_error "Failed to create base directory '$base_dir'."
+                            lib_log_error "Failed to create base directory '$base_dir'."
                             exit 1
                         }
                 fi
                 # and move it into place
                 mv "$tmp_path" "$base_dir/$file_name" || {
                     rm "$tmp_path" &>/dev/null
-                    __autoenv_log_error "Failed to move '$tmp_path' to '$base_dir/$file_name'."
+                    lib_log_error "Failed to move '$tmp_path' to '$base_dir/$file_name'."
                     exit 1
                 }
             fi
@@ -1123,20 +887,20 @@ __autoenv_file_index() {
     shasum="$(which shasum 2>/dev/null) -a 1" \
         || shasum=$(which sha1sum 2>/dev/null) \
         || {
-            __autoenv_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
+            lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
             return 1
         }
     while [ $# -gt 0 ]; do
         dir="$1" && shift
-        __autoenv_log_debug "Generating index '$(basename $dir)/index.auto_env'"
+        __autoenv_debug "Generating index '$(basename $dir)/index.auto_env'"
         (
             local scripts name exec_bit lines checksum path
             [ -d "$dir" ] || {
-                __autoenv_log_error "Directory '$dir' does not exist"
+                lib_log_error "Directory '$dir' does not exist"
                 exit 1
             }
             builtin cd "$dir" || {
-                __autoenv_log_error "Failed to change to '$dir'."
+                lib_log_error "Failed to change to '$dir'."
                 exit 1
             }
             # generate checksums for everything in here
@@ -1150,7 +914,7 @@ __autoenv_file_index() {
                 | xargs -0 $shasum > .index.autoenv.$$
             if [ $? -ne 0 ]; then
                 rm .index.autoenv.$$ &>/dev/null
-                __autoenv_log_error "Failed to generate checksum list for directory '$dir'."
+                lib_log_error "Failed to generate checksum list for directory '$dir'."
                 exit 1
             fi
             # add meta data (checksum, exec flag, etc) to the index
@@ -1169,18 +933,18 @@ __autoenv_file_index() {
             if [ $? -ne 0 ]; then
                 rm .index.autoenv.$$ &>/dev/null
                 rm .index.autoenv.$$.done &>/dev/null
-                __autoenv_log_error "Failed to generate index file for '$dir'."
+                lib_log_error "Failed to generate index file for '$dir'."
                 exit 1
             fi
             # put our new files in place
             rm .index.autoenv.$$ &>/dev/null
             mv .index.autoenv.$$.done index.autoenv || {
                 rm .index.autoenv.$$.done &>/dev/null
-                __autoenv_log_error "Failed to move autoenv index '$dir/index.autoenv'."
+                lib_log_error "Failed to move autoenv index '$dir/index.autoenv'."
                 exit 1
             }
             lines=$(wc -l index.autoenv | awk '{print $1}')
-            __autoenv_log "index-sync '$dir' done (files: $lines, scripts: $scripts)"
+            lib_log "index-sync '$dir' done (files: $lines, scripts: $scripts)"
         )
     done
 }
@@ -1188,25 +952,26 @@ __autoenv_file_index() {
 
 # print information about the current env (name, root, aliases, vars, etc)
 # $1 = which env, based on depth (e.g. 0 is first)
-__autoenv_log_env_info() {
+lib_log_env_info() {
     local depth="$1"
     local i item
     local items
-    local env_dir="${__AUTOENV_ENVS[depth-1]}"
+    local env_dir="${__AUTOENV_ENVS[depth]}"
     
+    lib_log "$(($depth + 1)). ** $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) ** $(lib_color white "$env_dir" white)" '0;36;40'
     items=()
     for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
         item="${__AUTOENV_VARS[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && __autoenv_log "  * ENV VARS: ${items[*]}" '1;34;40'
+    [ ${#items[*]} -gt 0 ] && lib_log "  * ENV VARS: $(lib_color lime "${items[@]}")" '0;32;40'
 
     items=()
     for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
         item="${__AUTOENV_ALIASES[i]}"
         [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
     done
-    [ ${#items[*]} -gt 0 ] && __autoenv_log "  * ALIASES: ${items[*]}" '1;34;40'
+    [ ${#items[*]} -gt 0 ] && lib_log "  * ALIASES: $(lib_color lemon "${items[@]}")" '0;33;40'
 
     (
         [ -d "$env_dir/.autoenv/scripts/" ] && {
@@ -1217,7 +982,7 @@ __autoenv_log_env_info() {
                     items[${#items[*]}]="$(basename "$item")"
                 }
             done
-            [ ${#items[*]} -gt 0 ] && __autoenv_log "  * SCRIPTS: ${items[*]}" '1;34;40'
+            [ ${#items[*]} -gt 0 ] && lib_log "  * SCRIPTS: $(lib_color pink "${items[@]}")" '0;31;40'
         }
     )
 }
@@ -1236,13 +1001,13 @@ __autoenv_go() {
                 ;;
             *)
                 [ -n "$env_name" ] && {
-                    __autoenv_log_error "env name '$env_name' already given; invalid arg: $1"
+                    lib_log_error "env name '$env_name' already given; invalid arg: $1"
                     return 1
                 }
-                # TODO: use __autoenv_match_one when it supports exact matches winning despite multiple matches existing (e.g. "foo" matches "foo" but "foobar" and "foobard" also exist)
+                # TODO: use lib_match_one when it supports exact matches winning despite multiple matches existing (e.g. "foo" matches "foo" but "foobar" and "foobard" also exist)
                 env_name="$1"
                 [ -L "$root_env_dir/$env_name" ] || {
-                    __autoenv_log_error "unknown env: '$env_name'"
+                    lib_log_error "unknown env: '$env_name'"
                     return 1
                 }
                 ;;
@@ -1250,7 +1015,7 @@ __autoenv_go() {
         shift
     done
     cd $(readlink "$root_env_dir/$env_name") || {
-        __autoenv_log_error "Failed to \"cd '$env_name'\""
+        lib_log_error "Failed to \"cd '$env_name'\""
         return 1
     }
     [ $up -eq 1 ] && {
@@ -1261,16 +1026,15 @@ __autoenv_go() {
 
 
 __autoenv_env_info() {
-    local env i
+    local env_dir i
     [ "${#__AUTOENV_ENVS[*]}" -eq 0 ] && {
-        __autoenv_log '++ no active envs'
+        lib_log '++ no active envs'
         return 0
     }
     # print each active env info
     for ((i=0; i<${#__AUTOENV_ENVS[*]}; i++)); do
-        env="${__AUTOENV_ENVS[i]}"
-        __autoenv_log "$((i+1)). ** env $(<"$env/.autoenv/.name") [$env]"
-        __autoenv_log_env_info $((i+1))
+        env_dir="${__AUTOENV_ENVS[i]}"
+        lib_log_env_info $i
     done
 }
 
@@ -1282,10 +1046,9 @@ __autoenv_init() {
     __autoenv_is_active "$env_dir" && return 0
     __autoenv_add_env "$env_dir"
     depth=$(__autoenv_get_depth "$env_dir") || {
-        __autoenv_log_error "Failed to get env depth for '$env_dir'"
+        lib_log_error "Failed to get env depth for '$env_dir'"
         return 1
     }
-    __autoenv_log "$depth. ++ init env $(<"$env_dir/.autoenv/.name") [$env_dir]"
     # we may init out-of-order to use our own env for init
     export AUTOENV_ENV="$env_dir"
 
@@ -1317,20 +1080,22 @@ __autoenv_init() {
         __autoenv_path_prepend_scripts "$env_dir/.autoenv/scripts" $depth
     }
 
+    # report our env as setup prior to running init scripts
+    lib_log_env_info $(($depth - 1))
+
     # and finally, our init scripts
     [ -d "$env_dir/.autoenv/init.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/init.d/"); do
-            __autoenv_log "$ . init.d/$name" '0;32;40'
+            lib_log "  $ . init.d/$name" '1;35;40'
             # many scripts use sloppy var handline, so ignore this
             set +u
             source "$env_dir/.autoenv/init.d/$name" \
-                || __autoenv_log_error "Failed to run env init script '$name'"
+                || lib_log_error "Failed to run env init script '$name'"
             set -u
         done
         unset AUTOENV_ENV
     }
 
-    __autoenv_log_env_info $depth
     # we may have init'd out-of-order, so always point to the last env
     AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
     
@@ -1345,13 +1110,13 @@ __autoenv_exit() {
 
     __autoenv_is_active "$env_dir" || return 0
     depth=$(__autoenv_depth "$env_dir")
-    __autoenv_log "$depth. -- exit env $(<"$env_dir/.autoenv/.name") [$env_dir]" '1;31;40'
+    lib_log "$depth. -- $(lib_color pink $(<"$env_dir/.autoenv/.name") red) -- $(lib_color darkgrey "$env_dir")" '0;31;40'
     AUTOENV_ENV="$env_dir"
 
     # run exit scripts
     [ -d "$env_dir/.autoenv/exit.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/exit.d/"); do
-            __autoenv_log "$ . exit.d/$name" '0;31;40'
+            lib_log "  $ . exit.d/$name" '0;35;40'
             source "$env_dir/.autoenv/exit.d/$name"
         done
     }
@@ -1431,7 +1196,7 @@ __autoenv_scan() {
 
     # warn about bad autoenv root
     [ -n "$__AUTOENV_ROOT" -a -d "$__AUTOENV_ROOT" ] || {
-        __autoenv_log "warning - AUTOENV_ROOT not set or home directory does not exist; this is required" '0;31;40'
+        lib_log "warning - AUTOENV_ROOT not set or home directory does not exist; this is required" '0;31;40'
         return 1
     }
 
@@ -1445,17 +1210,17 @@ __autoenv_scan() {
             (
                 # ensure we have a name and thus have been "added" already
                 [ -s "$scan_dir/.autoenv/.name" ] || {
-                    __autoenv_log "Untracked env: ${scan_dir##$__AUTOENV_ROOT/}; add with: ae add \"$scan_dir\" [NAME]" '1;33;40'
+                    lib_log "Untracked env: ${scan_dir##$__AUTOENV_ROOT/}; add with: ae add \"$scan_dir\" [NAME]" '1;33;40'
                     exit 1
                 }
                 env_name=$(<"$scan_dir/.autoenv/.name") || {
-                    __autoenv_log_error "Failed to read .name from '$scan_dir' env"
+                    lib_log_error "Failed to read .name from '$scan_dir' env"
                     exit 1
                 }
                 # ensure the symlink is valid too
                 real_scan_dir=$(builtin cd "$scan_dir" && pwd -P)
                 [ "$(readlink "$root_env_dir/$env_name")" = $(builtin cd "$real_scan_dir" && pwd -P) ] || {
-                    __autoenv_log_error "Name mistmach: $root_env_dir/$env_name points elsewhere; fix .autoenv/.name or run: ae forget '$env_name'"
+                    lib_log_error "Name mistmach: $root_env_dir/$env_name points elsewhere; fix .autoenv/.name or run: ae forget '$env_name'"
                     exit 1
                 }
             ) && found_envs+=("$(builtin cd "$scan_dir" && pwd -P)")
@@ -1463,7 +1228,7 @@ __autoenv_scan() {
         depth=$((depth+1))
         scan_dir="$(builtin cd "$scan_dir/.." && pwd)"
     done
-    [ ${#found_envs[*]} -gt 0 ] && __autoenv_log_debug "found envs: ${found_envs[*]}"
+    [ ${#found_envs[*]} -gt 0 ] && __autoenv_debug "found envs: ${found_envs[*]}"
 
     # first check to see which envs no longer exist or were exited
     # ignores any envs not yet added to __AUTOENV_ROOT/.autoenv/envs
@@ -1472,7 +1237,7 @@ __autoenv_scan() {
         if [ ${#found_envs[*]} -eq 0 ]; then
             __autoenv_exit "$env"
         else
-            __autoenv_in_list "$env" -- "${found_envs[@]}" \
+            lib_in_list "$env" -- "${found_envs[@]}" \
                 || __autoenv_exit "$env"
         fi
     done
@@ -1483,7 +1248,7 @@ __autoenv_scan() {
         if [ ${#__AUTOENV_ENVS[*]} -eq 0 ]; then
             __autoenv_init "$env"
         else
-            __autoenv_in_list "$env" -- "${__AUTOENV_ENVS[@]}" \
+            lib_in_list "$env" -- "${__AUTOENV_ENVS[@]}" \
                 || __autoenv_init "$env"
         fi
     done
@@ -1498,7 +1263,7 @@ __autoenv() {
         __autoenv_usage
         return 2
     }
-    cmd=$(__autoenv_match_one "$1" '' "${__AUTOENV_CMDS[@]}")
+    cmd=$(lib_match_one "$1" '' "${__AUTOENV_CMDS[@]}")
     retval=$?
     # if retval was 1 its a mismatch, so fail out
     [ $retval -ge 1 ] && {
@@ -1513,33 +1278,33 @@ __autoenv() {
     case "$cmd" in
         add)
             [ $# -ge 1 ] || {
-                __autoenv_log_error "usage: add PATH [NAME]"
+                lib_log_error "usage: add PATH [NAME]"
                 return 1
             }
             __autoenv_add "$@" || {
-                __autoenv_log_error "failed to add env $@"
+                lib_log_error "failed to add env $@"
                 return 1
             }
             __autoenv_scan
             ;;
         create)
-            __autoenv_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" || {
                 __autoenv_usage_help
                 return
             }
             __autoenv_create "$@" || {
-                __autoenv_log_error "failed to create env $@"
+                lib_log_error "failed to create env $@"
                 return 1
             }
             __autoenv_scan
             ;;
         forget)
             [ $# -eq 1 ] || {
-                __autoenv_log_error "usage: forget NAME"
+                lib_log_error "usage: forget NAME"
                 return 1
             }
             __autoenv_forget "$1" || {
-                __autoenv_log_error "failed to forget env $1"
+                lib_log_error "failed to forget env $1"
                 return 1
             }
             ;;
@@ -1548,7 +1313,7 @@ __autoenv() {
             ;;
         go)
             [ $# -eq 1 ] || {
-                __autoenv_log_error "usage: go [-u|--up] NAME"
+                lib_log_error "usage: go [-u|--up] NAME"
                 return 1
             }
             __autoenv_go "$@" || return 1
@@ -1561,28 +1326,28 @@ __autoenv() {
             ;;
         sync)
             [ $# -ge 1 ] || {
-                __autoenv_log_error "At least one sync name expected"
+                lib_log_error "At least one sync name expected"
                 __autoenv_usage_sync
                 return 1
             }
-            __autoenv_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" || {
                 __autoenv_usage_sync
                 return
             }
             [ ${#__AUTOENV_ENVS[*]} -gt 0 ] || {
-                __autoenv_log_error "Cannot perform sync without an active env"
+                lib_log_error "Cannot perform sync without an active env"
                 __autoenv_usage_sync
                 return 1
             }
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
         scan)
-            __autoenv_in_list "-h" "--help" -- "$@" || {
+            lib_in_list "-h" "--help" -- "$@" || {
                 __autoenv_usage_scan
                 return
             }
             [ $# -ge 1 ] || {
-                __autoenv_log_error "No args expected"
+                lib_log_error "No args expected"
                 __autoenv_usage_scan
                 return 1
             }
@@ -1599,7 +1364,7 @@ __autoenv() {
             ;;
         go)
             [ $# -eq 1 ] || {
-                __autoenv_log_error "usage: go [-u|--up] NAME"
+                lib_log_error "usage: go [-u|--up] NAME"
                 return 1
             }
             __autoenv_go "$@" || return 1
@@ -1617,7 +1382,7 @@ __autoenv() {
             ;;
         file-index)
             [ $# -gt 0 ] || {
-                __autoenv_log_error "file-index usage: DIR [DIR2]"
+                lib_log_error "file-index usage: DIR [DIR2]"
                 __autoenv_usage_file-index
                 return 1
             }
@@ -1656,7 +1421,7 @@ cd() {
                 | while read script; do
                     (
                         "$script"
-                    ) || __autoenv_log_error "Error running '$script': $?"
+                    ) || lib_log_error "Error running '$script': $?"
                 done
         done
     }
