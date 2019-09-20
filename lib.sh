@@ -1,31 +1,74 @@
 #  ,.-'`'-={[** lib.sh **]}=-'`'-.,
-# .--------------------------------. 
+# .--------------------------------.
 # | breathe life into bash scripts |
 # '--------------------------------'
+#
+# - flow    - easy failure, dry-run/verbose command wrapper
+# - logging - print colorful, tagged messages to stderr
+# - choices - prompts/menus for choices, quick input matching against lists
+# - misc    - colors/colorful text
 
 # set our logging tag based on env var, param, or finally whoever sourced us
 LIB_TAG="${LIB_TAG:-${1:-$(basename "$0")}}"
 
 
-lib_log() {
-    local clr="${2:-0;34;40}"
-    [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
-    echo -e "\033[1;30;40m# ($LIB_TAG) \033[${clr}m${1:-}\033[0;0;0m" >&2
+# exit with an error, and optional error message
+lib_fail() {
+    lib_log_error "${1-unknown error}"
+    exit ${2:-1}
 }
 
 
+# run another command unless LIB_DRYRUN=1; note
+# always prints quoted commands+args when LIB_VERBOSE=1
+lib_cmd() {
+    if [ ${LIB_DRYRUN:-0} -eq 1 ]; then
+        echo -e "\033[0;33;40m# $(printf "'%s' " "$@")\033[0m" >&2
+    else
+        [ ${LIB_VERBOSE:-0} -eq 1 ] \
+            && echo -e "\033[0;33;40m# $(printf "'%s' " "$@")\033[0m" >&2
+        "$@"
+    fi
+}
+
+
+# log a tagged informational message, optionally of a specific color code/name
+# $1 = message
+# $2 = color (dafault: dark grey)
+lib_log() {
+    local clr="${2:-0;34;40}"
+    [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
+    echo -e "\033[1;30;40m# ($LIB_TAG) \033[${clr}m${1:-}\033[0m" >&2
+}
+
+
+# log a tagged error message, optionally of a specific color code/name
+# $1 = message
+# $2 = color (default: pink)
 lib_log_error() {
     local clr="${2:-0;31;40}"
     local error_label="${3:-error}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
-    echo -e "\033[1;31;40m# ($LIB_TAG $error_label) \033[${clr}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[1;31;40m# ($LIB_TAG $error_label) \033[${clr}m${1:-}\033[0m" >&2
 }
 
 
+# log something, optionally of a specific color code/name
+# $1 = message
+# $2 = color (default: white)
 lib_log_raw() {
     local clr="${2:-0;37;40}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
-    echo -e "\033[${clr}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[${clr}m${1:-}\033[0m" >&2
+}
+
+
+# echo back stdin, minus any color codes
+# e.g.
+# $ echo -e "\033[1;32;40mfoo\033[0mbar" | lib_strip_color
+# foobar
+lib_strip_color() {
+    sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g'
 }
 
 
@@ -256,6 +299,7 @@ lib_in_list() {
     local pivot=
     local i j
 
+    # sort out within params what we're searching for vs matching against
     while [ $# -gt 0 ]; do
         case "$1" in
             --|==)
@@ -272,10 +316,13 @@ lib_in_list() {
         esac
         shift
     done
+
+    # find and possibly print the matched item/index
     [ ${#wanted[*]} -eq 0 -o "${#to_search[*]}" -eq 0 ] && return 1
     for ((i=0; i<${#wanted[*]}; i++)); do
         for ((j=0; j<${#to_search[*]}; j++)); do
             [ "${wanted[i]}" = "${to_search[j]}" ] &&  {
+                # TAB delimited, not space! easier to `cut`
                 [ "$pivot" = '==' ] && echo "$j	${wanted[i]}"
                 return 0
             }
@@ -344,7 +391,7 @@ lib_list_update() {
 # get a color code based on name or print a message with a certain color code/name
 # $1 = bash color code (e.g. 0;31;40) or nickname
 # $2 = optional text to print with the color; otherwise ethe code is printed
-# $3 = optional bash color code to reset to after if text is given
+# $3 = optional bash color code to reset to after if text is given; default=reset
 lib_color() {
     local clr="$1"
     local msg="${2:-}"
@@ -354,8 +401,8 @@ lib_color() {
         darkgrey pink lime lemon lightblue fushia lightcyan white reset
     )
     local color_codes=(
-        '0;30;40' '0;31;40' '0;32;40' '0;33;40' '0;34;40' '0;35;40' '0;36;40' '0;37;40' '0;0;0'
-        '1;30;40' '1;31;40' '1;32;40' '1;33;40' '1;34;40' '1;35;40' '1;36;40' '1;37;40' '0;0;0'
+        '0;30;40' '0;31;40' '0;32;40' '0;33;40' '0;34;40' '0;35;40' '0;36;40' '0;37;40' '0'
+        '1;30;40' '1;31;40' '1;32;40' '1;33;40' '1;34;40' '1;35;40' '1;36;40' '1;37;40' '0'
     )
     local i
     # map names to codes if needed
@@ -363,17 +410,184 @@ lib_color() {
         i=$(lib_in_list "$clr" == "${colors[@]}" | cut -f 1)
         clr="${color_codes[${i:-8}]}"
     }
+    # no message given? just return the color code back
     if [ -z "$msg" ]; then
         echo "$clr"
     else
+        # otherwise print a colorized message
         clr="\033[${clr}m"
-        [ -n "$clr_end" ] && {
-            [ "${clr_end//;/}" = "$clr_end" ] && {
-                i=$(lib_in_list "$clr_end" == "${colors[@]}" | cut -f 1)
-                clr_end="${color_codes[${i:-8}]}"
-            }
-            clr_end="\033[${clr_end}m" 
+        [ -n "$clr_end" ] || clr_end=0  # reset by default
+        [ "${clr_end//;/}" = "$clr_end" ] && {
+            i=$(lib_in_list "$clr_end" == "${colors[@]}" | cut -f 1)
+            clr_end="${color_codes[${i:-8}]}"
         }
-        echo -e "${clr}${msg}${clr_end}"
+        clr_end="\033[${clr_end}m"
+        echo "${clr}${msg}${clr_end}"
     fi
+}
+
+# print columns of data, optionally using a prefix and suffex set of chars
+# -c|--color  COLOR_OR_CODE  - use the style given for the items
+# -d|--delimiter STRING      - use a different delimeter than a double space
+# -h|--header HEADER
+# -m|--min                   - don't try to fit the full term width; if single
+#                              row, don't pad to max value width
+# -p|--prefix PREFIX
+# -s|--suffix SUFFIX
+# $N = message strings
+#
+# e.g.:, assuming a super terminal width of ~55 chars
+# $ lib_colors -p '-={ ' -h 'Food:' -s ' }=-' grape apple pear ... blah
+# -={ Food: grape apple pear ...                      }=-
+# -={       ... blah                                  }=-
+lib_cols() {
+    local header=
+    local prefix=
+    local suffix=
+    local color=0
+    local min=0
+    local header_raw prefix_raw suffix_raw
+    local msgs=()
+    local msg_w=0
+    local delim='  '
+    local delim_raw
+    local single_row=0
+    local i style_w row_w cols msg_per_col max_col_w=0 extra_space=0 msg_space=0
+    local row=0 is_last_col=0 is_last_val=0 space cols_missing
+
+    cols=$(tput cols) || {
+        lib_log_error "Failed to determine terminal width"
+        return 1
+    }
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -c|--color)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --color|-c"
+                    return 1
+                }
+                color="$2"
+                [ "${color//;/}" = "$color" ] && color=$(lib_color "$color")
+                shift
+                ;;
+            -d|--delimeter)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --delimeter|-d"
+                    return 1
+                }
+                delim="$2"
+                shift
+                ;;
+            -h|--header)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --header|-h"
+                    return 1
+                }
+                header="$2"
+                shift
+                ;;
+            -p|--prefix)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --prefix|-p"
+                    return 1
+                }
+                prefix="$2"
+                shift
+                ;;
+            -m|--min)
+                min=1
+                ;;
+            -s|--suffix)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --suffix|-s"
+                    return 1
+                }
+                suffix="$2"
+                shift
+                ;;
+            -w|--width)
+                [ $# -ge 2 ] || {
+                    lib_log_error "Missing lib_cols param to --width|-w"
+                    return 1
+                }
+                cols="$2"
+                shift
+                ;;
+            *)
+                msgs+=("$1")
+                # track the longest value
+                [ ${#1} -gt $max_col_w ] && max_col_w=${#1}
+                # keep a running total of total width
+                msg_w=$((msg_w + ${#1}))
+                ;;
+        esac
+        shift
+    done
+    [ ${#msgs[*]} -eq 0 ] && return
+
+    # we need raw char counts to do terminal width math right
+    header_raw="$(echo -e "$header" | lib_strip_color)"
+    prefix_raw="$(echo -e "$prefix" | lib_strip_color)"
+    suffix_raw="$(echo -e "$suffix" | lib_strip_color)"
+    delim_raw="$(echo -e "$delim" | lib_strip_color)"
+    msg_w=$(( msg_w + ((${#msgs[*]} - 1) * ${#delim_raw}) ))
+    # based on max_col_w, how many columns do we get?
+    style_w=$((${#header_raw} + ${#prefix_raw} + ${#suffix_raw}))
+    # how much usable space do we have for messages?
+    row_w=$((cols - style_w))
+    space="$(printf '%0.s ' $(seq 1 $row_w))"  # faster than doing this over and over
+    # adding one for delim space after each col, and +more as the last won't have one
+    msg_per_col=$(( (row_w + ${#delim_raw}) / (max_col_w + ${#delim_raw}) ))
+    if [ $min -eq 0 ]; then
+        extra_space=$(( (row_w + ${#delim_raw}) - (msg_per_col * (max_col_w + ${#delim_raw})) ))
+    else
+        # can we fit all on one row?
+        [ $msg_w -le $row_w ] && {
+            single_row=1
+            msg_per_col=${#msgs[*]}
+        }
+    fi
+    [ $extra_space -gt 0 ] && suffix="\033[${color}m${space:0:extra_space}\033[0m$suffix"
+
+    # print out all the messages into cols w/ prefix + header ... suffix
+    for ((i=0; i<${#msgs[*]}; i++)); do
+        msg="${msgs[i]}"
+        # last columns get spacing handled differently
+        [ $((i % msg_per_col)) = $((msg_per_col - 1)) ] \
+            && is_last_col=1 \
+            || is_last_col=0
+        [ $((i+1)) = ${#msgs[*]} ] \
+            && is_last_val=1 \
+            || is_last_val=0
+        # print prefix/headers or spacing at the start of each row
+        [ $((i % msg_per_col)) -eq 0 ] && {
+            if [ $row -eq 0 ]; then
+                echo -en "\033[0m$prefix\033[0m$header\033[0m"
+                # clear out the header w/ blanks
+                header="\033[${color}m$(echo -e "$header" \
+                    | lib_strip_color \
+                    | sed 's/./ /g' \
+                    | tr -d '\n')"
+            else
+                echo -en "$prefix\033[0m$header"
+            fi
+        }
+        # fill up the column with space; add an extra if we're not the very last row
+        [ $single_row -eq 0 ] && msg_space=$((max_col_w - ${#msg}))
+        # we're maybe last in the row, last in the list, or a regular column
+        [ $is_last_val -eq 1 -a $is_last_col -eq 0 ] && {
+            # add in space for the columns we're missing
+            cols_missing=$((msg_per_col - (i % msg_per_col) - 1))
+            msg_space=$(( msg_space + (cols_missing * max_col_w) + (cols_missing * ${#delim_raw}) ))
+        }
+        [ $msg_space -ge 1 ] && msg="$msg${space:0:msg_space}"
+        [ $is_last_col -eq 0 -a $is_last_val -eq 0 ] && msg="$msg$delim"
+        echo -en "\033[${color}m$msg"
+        [ $is_last_col -eq 1 -o $is_last_val -eq 1 ] && {
+            echo -e "\033[0m$suffix"
+            let row+=1
+        }
+    done
+    echo -en "\033[0m"
 }

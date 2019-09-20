@@ -1,4 +1,4 @@
-#!/bin/bash -u
+ #!/bin/bash -u
 #
 # TODO:
 # - exec batches of aliases from known envs
@@ -8,7 +8,7 @@
 
 
 # --- main internals --
-__AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached; 
+__AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached;
 __AUTOENV_ENVS=()  # list of active envs
 __AUTOENV_VARS=()  # names of environmental variables we set; named are prefixed with the env depth they were applied at
 __AUTOENV_ALIASES=()  # names of aliases we created; named are prefixed with the env depth they were applied at
@@ -96,7 +96,7 @@ Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
 
 
 __autoenv_usage_sync() {
-    lib_log "Usage: autoenv sync SYNCNAME [SYNCNAME2]"
+    lib_log "Usage: autoenv sync [ARGUMENTS] SYNCNAME [SYNCNAME2]"
     lib_log_raw "
 
 Sync files to the DIR given based on the target NAME(S). Requires you to set
@@ -109,8 +109,8 @@ ARGUMENTS:
 
   -h|--help         This information
   -v|--verbose      Print verbose sync information
-  -d|--dryrun       Do not make any changes; just report commands that would run
-  SYNCNAME          Upstream name of target folder to sync locally (repeatable)
+
+SYNCNAME            Upstream name of target folder to sync locally (repeatable)
 
 Examples:
 
@@ -119,7 +119,7 @@ Examples:
   [foo ~/git/my-default-env]$ git add . && git commit -m 'blah blah' && git push
 
   # on another host, automatically initialize our bash stuff
-  [bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/ 
+  [bar ~]$ export AUTOENV_SYNC_URL=https://raw.githubusercontent.com/joesmith/my-default-env/master/
   [bar ~]$ autoenv sync bash
 "
 }
@@ -193,9 +193,20 @@ of 'add'.
 }
 
 
-__autoenv_usage_file-index() {
-    lib_log "Usage: autoenv file-index DIR [DIR2]"
+__autoenv_usage_file_index() {
+    lib_log "Usage: autoenv file-index DIR [DIR2] [ARGS]"
     lib_log_raw "
+
+Scan the directories given for files and scripts to generate an
+'index.auto_env'. These can be uploaded alongside the files to use autoenv
+'sync' to quickly download elsewhere (e.g. to quickly init a home directory).
+
+Automatically skips .git dirs, vim swap files, and our index files.
+
+ARGS
+
+   -v|--verbose   Print verbose debugging information
+   -d|--dryrun    Run without making changes
 "
 }
 
@@ -221,7 +232,7 @@ edit. Allows partial matches as long as arguments are unambiguous.
 __autoenv_debug() {
     [ ${AUTOENV_DEBUG:-0} = 1 ] || return 0
     local color="${2:-1;35;40}"
-    echo -e "\033[0;35;40m# ($__AUTOENV_TAG debug) \033[${color}m${1:-}\033[0;0;0m" >&2
+    echo -e "\033[0;35;40m# ($__AUTOENV_TAG debug) \033[${color}m${1:-}\033[0m" >&2
 }
 
 
@@ -435,6 +446,47 @@ __autoenv_http_agent() {
 }
 
 
+# make an HTTP call and optionally save output to a file
+__autoenv_http() {
+    local agent
+    local url
+    local output_file=
+    local args=()
+
+    # get agent/url and any extra args
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -o|--output)
+                [ $# -ge 1 ] || {
+                    lib_log_error "missing arg to __autoenv_http -o|--output"
+                    return 1
+                }
+                output_file="$2"
+                shift
+                ;;
+            *)
+                if [ -n "$agent" ]; then
+                    agent="$1"
+                elif [ -n "$url" ]; then
+                    url="$1"
+                else
+                    args+=("$1")
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    [ -n "$agent" -a -n "$url" ] || {
+        lib_log_error "Either agent or URL arguments are missing"
+        return 1
+    }
+    args+=("$url")
+    [ -n "$output_file" ] && args+=(-o "$output_file")
+    "$agent" "${args[@]}"
+}
+
+
 
 # ------------------------------------------------------------------------------
 # main logic
@@ -455,7 +507,7 @@ __autoenv_create() {
         return 1
     }
     # init the env
-    mkdir -p "$env_root/.autoenv/{vars,aliases,exit.d,init.d,up.d}" || {
+    mkdir -p "$env_root/.autoenv/"{vars,aliases,exit.d,init.d,up.d} || {
         lib_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
     }
@@ -680,7 +732,7 @@ __autoenv_up() {
                 lib_log "PID file already exists for $script: $(<"$pid_file")"
                 exit 1
             }
-            ( 
+            (
                 cd "$env_dir" || exit 1
                 AUTOENV_ENV="$env_dir" nohup "$script" &>/dev/null </dev/null &
                 echo $! >> "$pid_file"
@@ -694,7 +746,7 @@ __autoenv_up() {
 }
 
 
-# sends a sig-kill to each .pid files in autoenv/up.d 
+# sends a sig-kill to each .pid files in autoenv/up.d
 __autoenv_down() {
     # FIXME - daemons vs scripts
     local env_dir="$1"
@@ -736,13 +788,31 @@ __autoenv_down() {
 # $2..N = sync target names (e.g. for "GET $1/$2/index.autoenv")
 # $AUTOENV_SYNC_URL = env var to URL containing sync dirs w/ index.autoenv files
 __autoenv_sync() {
-    local autoenv_dir="$1" && shift
+    local target_dir
+    local verbose=0
+    local target_names=()
+    local http=$(__autoenv_http_agent) || return 1
     local sync_src="${AUTOENV_SYNC_URL:-}"
     [ -n "$sync_src" ] || {
-        lib_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories." 
+        lib_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories."
         return 1
     }
-    local http=$(__autoenv_http_agent) || return 1
+
+    # get our target dir and the sync target names + misc args
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -v|--verbose)
+                verbose=1
+                ;;
+            *)
+                [ -n "$target_dir" ] \
+                    && target_dir="$1" \
+                    || target_names+=("$1")
+        esac
+        shift
+    done
+
+
     shasum="$(which shasum 2>/dev/null) -a 1" \
         || shasum=$(which sha1sum 2>/dev/null) \
         || {
@@ -753,10 +823,12 @@ __autoenv_sync() {
     (
     local target base_dir file_name exec_bit checksum path tmp_path \
         new_checksum old_checksum preview_lines file_changed
-    cd "$autoenv_dir" || {
-        lib_log "Failed to change to sync directory '$HOME'."
+    cd "$target_dir" || {
+        lib_log "Failed to change to sync directory '$target_dir'."
         exit 1
     }
+    [ $verbose -eq 1 ] && { AUTOENV_DEBUG=1; LIB_VERBOSE=1; }
+
     # for each target download the autoenv index and listed files
     while [ $# -gt 0 ]; do
         target="$1" && shift
@@ -766,16 +838,10 @@ __autoenv_sync() {
             __autoenv_debug "fetching file '$path'"
             # normalize the path to clean extra slashes, preceding periods
             path=$(echo $path | sed 's#//*#/#g' | sed 's#^\./##')
-            base_dir=$(dirname "$path") || {
-                lib_log_error "Failed to get base directory of '$path'."
-                exit 1
-            }
-            file_name=$(basename "$path") || {
-                lib_log_error "Failed to get file name of '$path'."
-                exit 1
-            }
+            base_dir=$(dirname "$path") || lib_fail "Failed to get base directory of '$path'."
+            file_name=$(basename "$path") || lib_fail "Failed to get file name of '$path'."
             tmp_path="$base_dir/.$file_name.autoenv-sync.$$"
-            "$http" "$sync_src/$target/$path" > "$tmp_path" \
+            __autoenv_http "$http" "$sync_src/$target/$path" -o "$tmp_path" \
                 || {
                     rm "$tmp_path" &>/dev/null
                     lib_log_error "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
@@ -860,28 +926,55 @@ __autoenv_sync() {
 }
 
 
-# generate 'index.auto_env' for each dir given
+# generate 'index.auto_env' for each dir given; ignores .git dirs, our idnex
+# files, and vim swap files
+# $1..N = directories to index
+# -v|--verbose = print verbose info about indexing
+# -d|--dryrun  = print information about changes without doing anything
 __autoenv_file_index() {
-    local dir shasum
+    local paths=()
+    local shasum
+    local verbose=0
+    local dryrun=0
+    local dir
+
     shasum="$(which shasum 2>/dev/null) -a 1" \
         || shasum=$(which sha1sum 2>/dev/null) \
         || {
             lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
             return 1
         }
+
     while [ $# -gt 0 ]; do
-        dir="$1" && shift
-        __autoenv_debug "Generating index '$(basename $dir)/index.auto_env'"
+        case "$1" in
+            -v|--verbose)
+                verbose=1
+                ;;
+            -d|--dryrun)
+                dryrun=1
+                ;;
+            *)
+                [ -d "$1" ] || {
+                    lib_log_error "Invalid path: '$1'"
+                    return 1
+                }
+                paths+=("$1")
+                ;;
+        esac
+        shift
+    done
+    [ ${#paths[*]} -gt 0 ] || {
+        lib_log_error "No paths given to do file indexing on"
+        return 1
+    }
+
+    for dir in "${paths[@]}"; do
         (
             local scripts name exec_bit lines checksum path
-            [ -d "$dir" ] || {
-                lib_log_error "Directory '$dir' does not exist"
-                exit 1
-            }
-            builtin cd "$dir" || {
-                lib_log_error "Failed to change to '$dir'."
-                exit 1
-            }
+            [ $verbose -eq 1 ] && AUTOENV_DEBUG=1
+            __autoenv_debug "Generating index '$(basename $dir)/index.auto_env'"
+            [ -d "$dir" ] || lib_fail "Directory '$dir' does not exist"
+            builtin cd "$dir" || lib_fail "Failed to change to '$dir'."
             # generate checksums for everything in here
             # don't overwrite the existing index until we are done
             find . -type f \
@@ -893,8 +986,7 @@ __autoenv_file_index() {
                 | xargs -0 $shasum > .index.autoenv.$$
             if [ $? -ne 0 ]; then
                 rm .index.autoenv.$$ &>/dev/null
-                lib_log_error "Failed to generate checksum list for directory '$dir'."
-                exit 1
+                lib_fail "Failed to generate checksum list for directory '$dir'."
             fi
             # add meta data (checksum, exec flag, etc) to the index
             scripts=0 # out of curiosity, how many were scripts?
@@ -904,66 +996,34 @@ __autoenv_file_index() {
                 if [ ${#name} -ne 0 ]; then
                     exec_bit=1
                     scripts=$((scripts + 1))
-                else 
+                else
                     exec_bit=0
                 fi
+                __autoenv_debug " - $path (exec=$exec_bit, checksum=$checksum)"
                 echo "$exec_bit  $checksum  $path"
             done < .index.autoenv.$$ > .index.autoenv.$$.done
             if [ $? -ne 0 ]; then
                 rm .index.autoenv.$$ &>/dev/null
                 rm .index.autoenv.$$.done &>/dev/null
-                lib_log_error "Failed to generate index file for '$dir'."
-                exit 1
+                lib_fail "Failed to generate index file for '$dir'."
             fi
             # put our new files in place
             rm .index.autoenv.$$ &>/dev/null
-            mv .index.autoenv.$$.done index.autoenv || {
-                rm .index.autoenv.$$.done &>/dev/null
-                lib_log_error "Failed to move autoenv index '$dir/index.autoenv'."
-                exit 1
-            }
-            lines=$(wc -l index.autoenv | awk '{print $1}')
-            lib_log "index-sync '$dir' done (files: $lines, scripts: $scripts)"
-        )
-    done
-}
-
-
-# print information about the current env (name, root, aliases, vars, etc)
-# $1 = which env, based on depth (e.g. 0 is first)
-lib_log_env_info() {
-    local depth="$1"
-    local i item
-    local items
-    local env_dir="${__AUTOENV_ENVS[depth]}"
-    
-    lib_log "$(($depth + 1)). ** $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) ** $(lib_color white "$env_dir" white)" '0;36;40'
-
-    items=()
-    for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
-        item="${__AUTOENV_VARS[i]}"
-        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
-    done
-    [ ${#items[*]} -gt 0 ] && lib_log "  * ENV VARS: $(lib_color lime "${items[*]}")" '0;32;40'
-
-    items=()
-    for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
-        item="${__AUTOENV_ALIASES[i]}"
-    done
-    [ ${#items[*]} -gt 0 ] && lib_log "  * ALIASES: $(lib_color lemon "${items[*]}")" '0;33;40'
-
-    (
-        [ -d "$env_dir/.autoenv/scripts/" ] && {
-            items=()
-            for item in "$env_dir/.autoenv/scripts/"*; do
-                # ignore non-scripts and potential unmatched wildcard
-                [ -x "$item" ] && {
-                    items[${#items[*]}]="$(basename "$item")"
+            lines=$(wc -l .index.autoenv.$$.done | awk '{print $1}')
+            [ $dryrun -eq 1 ] && {
+                rm -f .index.autoenv.$$.done
+            } || {
+                mv .index.autoenv.$$.done index.autoenv || {
+                    rm .index.autoenv.$$.done &>/dev/null
+                    lib_fail "Failed to move autoenv index '$dir/index.autoenv'."
                 }
-            done
-            [ ${#items[*]} -gt 0 ] && lib_log "  * SCRIPTS: $(lib_color pink "${items[*]}")" '0;31;40'
+            }
+            lib_log "index-sync '$dir' done (files: $lines, scripts: $scripts)"
+        ) || {
+            lib_log_error "Failed to index '$dir'"
+            return 1
         }
-    )
+    done
 }
 
 
@@ -1003,21 +1063,73 @@ __autoenv_go() {
 }
 
 
+# print information about the current env (name, root, aliases, vars, etc)
+# $1 = which env, based on depth (e.g. 0 is first)
+__autoenv_log_env_info() {
+    local depth="$1"
+    local i item
+    local items
+    local env_dir="${__AUTOENV_ENVS[depth]}"
+
+    lib_log "$(($depth + 1)). ──══╝ $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) ╚══─── $(lib_color white "$env_dir" white)" '0;36;40'
+
+    items=()
+    for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
+        item="${__AUTOENV_VARS[i]}"
+        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
+    done
+    [ ${#items[*]} -gt 0 ] && lib_cols --min \
+        -h "\033[0;32;40m         ░▒▌EnvVars▐▒░ " \
+        -c lime \
+        "${items[@]}" >&2
+
+    items=()
+    for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
+        item="${__AUTOENV_ALIASES[i]}"
+        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
+    done
+    [ ${#items[*]} -gt 0 ] && lib_cols --min \
+        -h "\033[0;33;40m         ░▒▌Aliases▐▒░ " \
+        -c lemon \
+        "${items[@]}"
+
+    (
+        [ -d "$env_dir/.autoenv/scripts/" ] && {
+            items=()
+            for item in "$env_dir/.autoenv/scripts/"*; do
+                # ignore non-scripts and potential unmatched wildcard
+                [ -x "$item" ] && {
+                    items[${#items[*]}]="$(basename "$item")"
+                }
+            done
+            [ ${#items[*]} -gt 0 ] && lib_cols --min \
+                 -h "\033[0;31;40m         ░▒▌Scripts▐▒░ " \
+                 -c pink \
+                 "${items[@]}"
+        }
+    )
+}
+
+
+# print information about each active env
 __autoenv_env_info() {
     local env_dir i
-    [ "${#__AUTOENV_ENVS[*]}" -eq 0 ] && {
-        lib_log '** no active envs' cyan
-        return 0
-    }
-    # print each active env info
-    lib_log "[ ENVS: $(lib_color lightcyan "$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")")]" '4;36;40'
+    local envs="$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")"
+    lib_cols --min -d "\033[0;30;44m ░ " \
+        -p "\033[0;34;40m░▒▓" \
+        -h "\033[0;30;44mENVS: " \
+        -s "\033[0;34;40m▓▒░" \
+        -c '1;37;44' \
+        $envs
     for ((i=0; i<${#__AUTOENV_ENVS[*]}; i++)); do
         env_dir="${__AUTOENV_ENVS[i]}"
-        lib_log_env_info $i
+        __autoenv_log_env_info $i
     done
 }
 
 
+# initialize an env; ensure nesting is handled properly based on dir depth
+# $1 = path to autoenv dir to init
 __autoenv_init() {
     local env_dir="$1"
     local name value depth item
@@ -1060,12 +1172,12 @@ __autoenv_init() {
     }
 
     # report our env as setup prior to running init scripts
-    lib_log_env_info $(($depth - 1))
+    __autoenv_log_env_info $depth
 
     # and finally, our init scripts
     [ -d "$env_dir/.autoenv/init.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/init.d/"); do
-            lib_log "  $ . init.d/$name" '1;35;40'
+            lib_log "   $(lib_color purple '»»' fushia) . init.d/$name" '1;35;40'
             # many scripts use sloppy var handline, so ignore this
             set +u
             source "$env_dir/.autoenv/init.d/$name" \
@@ -1077,11 +1189,12 @@ __autoenv_init() {
 
     # we may have init'd out-of-order, so always point to the last env
     AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
-    
+
     return 0
 }
 
-
+# de-init an active env, resetting PATH, aliases, env vars, etc
+# $1 = path to authenv dir to exit
 __autoenv_exit() {
     local env_dir="$1"
     local kept_aliases=() kept_vars=()
@@ -1095,7 +1208,7 @@ __autoenv_exit() {
     # run exit scripts
     [ -d "$env_dir/.autoenv/exit.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/exit.d/"); do
-            lib_log "  $ . exit.d/$name" '0;35;40'
+            lib_log "   $(lib_color purple '««' fushia) . exit.d/$name" '0;35;40'
             source "$env_dir/.autoenv/exit.d/$name"
         done
     }
@@ -1168,8 +1281,9 @@ __autoenv_scan() {
     local env_name
     local found_envs=()
     local real_scan_dir
+    #set -x
     local root_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
-    local scan_dir="$PWD" 
+    local scan_dir="$PWD"
     local seen_root=0
 
 
@@ -1231,6 +1345,7 @@ __autoenv_scan() {
                 || __autoenv_init "$env"
         fi
     done
+    #set +x
 }
 
 
@@ -1268,7 +1383,7 @@ __autoenv() {
             ;;
         create)
             lib_in_list "-h" "--help" -- "$@" && {
-                __autoenv_usage_help
+                __autoenv_usage_create
                 return
             }
             __autoenv_create "$@" || {
@@ -1360,7 +1475,7 @@ __autoenv() {
         file-index)
             [ $# -gt 0 ] || {
                 lib_log_error "file-index usage: DIR [DIR2]"
-                __autoenv_usage_file-index
+                __autoenv_usage_file_index
                 return 1
             }
             __autoenv_file_index "$@"
@@ -1402,7 +1517,7 @@ cd() {
                 done
         done
     }
-        
+
     # scan for envs, activating only known ones
     [ "${AUTOENV:-1}" -ne 0 ] && __autoenv_scan
 
