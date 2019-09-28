@@ -13,19 +13,22 @@ __AUTOENV_ENVS=()  # list of active envs
 __AUTOENV_VARS=()  # names of environmental variables we set; named are prefixed with the env depth they were applied at
 __AUTOENV_ALIASES=()  # names of aliases we created; named are prefixed with the env depth they were applied at
 
+__AUTOENV_TAG="æ"  # for logging during automatic actions
+__AUTOENV_BASE_DIR=  # location of this script
 __AUTOENV_SCAN_DEPTH=${AUTOENV_DEPTH:-16}  # how far up to scan at most
 __AUTOENV_CMDS=(
     add
     create
-    delete
+    down
     edit
+    forget
     file-index
     go
     help
     info
     reload
-    run
     sync
+    up
 )
 # trim slash, if needed
 [ "${__AUTOENV_ROOT:${#__AUTOENV_ROOT}-1}" = '/' ] \
@@ -42,21 +45,18 @@ AUTOENV_PENV=
 # helper library; find it either by:
 # 1 - same dir as autoenv.sh script/link
 # 2 - if we're a symlink, then in the actual location of this script
-__AUTOENV_TAG="æ"
 if [ -f "$(dirname ${BASH_SOURCE[0]})/lib.sh" ]; then
-    . "$(dirname ${BASH_SOURCE[0]})/lib.sh" "$__AUTOENV_TAG" || {
-        echo "Failed to source lib.sh from script dir" >&2
-        return 1
-    }
+    __AUTOENV_BASE_DIR="$(dirname ${BASH_SOURCE[0]})"
 elif [ -f "$(dirname $(readlink ${BASH_SOURCE[0]}))/lib.sh" ]; then
-    . "$(dirname $(readlink ${BASH_SOURCE[0]}))/lib.sh" "$__AUTOENV_TAG" || {
-        echo "Failed to source lib.sh from symlink dir" >&2
-        return 1
-    }
+    __AUTOENV_BASE_DIR="$(dirname $(readlink ${BASH_SOURCE[0]}))"
 else
     echo "Unable to find lib.sh in $(dirname ${BASH_SOURCE[0]})/ or $(dirname $(readlink ${BASH_SOURCE[0]}))" >&2
     return 1
 fi
+. "$__AUTOENV_BASE_DIR/lib.sh" "$__AUTOENV_TAG" || {
+    echo "Failed to source lib.sh from script dir" >&2
+    return 1
+}
 
 
 
@@ -65,40 +65,64 @@ fi
 # ------------------------------------------------------------------------------
 
 __autoenv_usage() {
-    lib_log "Augments 'cd' to manage aliases, scripts, and env vars based on nested '.autoenv' dirs" '1;37;40'
-    lib_log_raw "
-COMMANDS
-
-Command and argument names (except paths) can be abbreviated so long as only
-one match is found.
-
-  # generic
-  help                     this info
-  info                     summarize known and active envs
-  reload                   reinitialize all .envs; forgets removed envs, adds new envs
-
-  # env management
-  add PATH [NAME]          add existing env to memory for tracking
-  create PATH [NAME]       create skeleton .autoenv dir and print usage hints
-  edit [WHAT] [WHICH]      launch env editor, optionally for a specific thing
-  forget NAME              remove this env from memory; deactivate and down
-
-  # env operations
-  go [-u|--up] ENV         CD to the environment named and optionally run it
-  up [SCRIPT]              executes \`nohup run.d/* &>/dev/null </dev/null &\`, in order
-  down [SCRIPT]            stop one or more processes from 'run.d/'
-  file-index DIR [DIR2]    Generate index files in each dir; needed for syncs
-  sync NAME [NAME2]        Fetch files/scripts based on \$AUTOENV_SYNC_URL
-
-Autoscanning can be disabled by setting AUTOENV=0; any other value enables it.
-"
+    # far too slow to generate this all via lib_color/etc
+    cat << EOI >&2
+[0;34;40m╓══════════════════════════════════════════════════════════════════════╖[0m
+[0;34;40m║[1;34;40m autoenv (æ) augments "cd" to manage aliases, scripts, and env vars   [0;34;40m║[0m
+[0;34;40m║[1;34;40m via nested ".autoenv" dirs; provides tons of 'lib_\$func' helpers     [0;34;40m║[0m
+[0;34;40m╟──────────────────────────────────────────────────────────────────────╢[0m
+[0;34;40m║[1;37;40m usage: ae CMD [ARGS]                                                 [0;34;40m║[0m
+[0;34;40m║                                                                      ║[0m
+[0;34;40m║ [4;36;40mCOMMANDS                                                            [0;34;40m ║[0m
+[0;34;40m║[1;36;40m Command and argument names (except paths) can be abbreviated so      [0;34;40m║[0m
+[0;34;40m║[1;36;40m long as only one match is found. Every command has a -h|--help arg.  [0;34;40m║[0m
+[0;34;40m║                                                                      ║[0m
+[0;34;40m║[0;33;40m   # generic                                                          [0;34;40m║[0m
+[0;34;40m║[1;33;40m   help[0;37;40m                      this info                                [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   info[0;37;40m                      summarize known and active envs          [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   reload[0;37;40m                    reinitialize all .envs along the path    [0;34;40m║[0m[0m
+[0;34;40m║[0;33;40m   # env management (\$HOME/.autoenv/envs/* = NAME symlinks to envs)   [0;34;40m║[0m
+[0;34;40m║[1;33;40m   add[1;37;40m PATH [NAME]          [0;37;40madd existing env                          [0;34;40m║[0m
+[0;34;40m║[1;33;40m   create[1;37;40m PATH [NAME]       [0;37;40mcreate .autoenv dirs; print usage hints   [0;34;40m║[0m
+[0;34;40m║[1;33;40m   edit[1;37;40m [WHAT] [WHICH]      [0;37;40minteractive  env editor                   [0;34;40m║[0m
+[0;34;40m║[1;33;40m   forget[1;37;40m NAME              [0;37;40mremove this env; deactivate and down      [0;34;40m║[0m
+[0;34;40m║[0;33;40m   # env operations                                                   [0;34;40m║[0m
+[0;34;40m║[1;33;40m   go[1;37;40m [-u|--up] NAME        [0;37;40mCD to named env dir; optionally "run" it  [0;34;40m║[0m
+[0;34;40m║[1;33;40m   up[1;37;40m [DAEMON]              [0;37;40mdaemonize "up.d/" in alphabetic order     [0;34;40m║[0m
+[0;34;40m║[1;33;40m   down[1;37;40m [DAEMON]            [0;37;40mstop amy started daemons from "up"        [0;34;40m║[0m
+[0;34;40m║[1;33;40m   run[1;37;40m [SCRIPT]             [0;37;40mrun "run.d/" in alphabetic order          [0;34;40m║[0m
+[0;34;40m║[0;33;40m   # env syncronization                                               [0;34;40m║[0m
+[0;34;40m║[1;33;40m   file-index[1;37;40m DIR [DIR2]    [0;37;40mGenerate "autoenv.index" needed for syncs [0;34;40m║[0m
+[0;34;40m║[1;33;40m   sync[1;37;40m NAME [NAME2]        [0;37;40mFetch files based on \$AUTOENV_SYNC_URL    [0;34;40m║[0m
+[0;34;40m║                                                                      ║[0m
+[0;34;40m║ [4;36;40mAUTOENV ENVIRON VARS                                                [0;34;40m ║[0m
+[0;34;40m║[0;32;40m   # change run-time behavior                                         [0;34;40m║[0m[0m
+[0;34;40m║[1;32;40m   AUTOENV[0;37;40m                 disables env scanning when set to 0        [0;34;40m║[0m[0m
+[0;34;40m║[1;32;40m   AUTOENV_ROOT[0;37;40m            top-most possible env dir; default: \$HOME  [0;34;40m║[0m[0m
+[0;34;40m║[1;32;40m   AUTOENV_DEBUG[0;37;40m           set to 1 for verbose debugging info        [0;34;40m║[0m[0m
+[0;34;40m║[0;32;40m   # autotically managed by autoenv                                   [0;34;40m║[0m[0m
+[0;34;40m║[1;32;40m   AUTOENV_ENV[0;37;40m             auto set to deepest active env dir         [0;34;40m║[0m[0m
+[0;34;40m║[1;32;40m   AUTOENV_PENV[0;37;40m            auto set to parent env dir on alias defs   [0;34;40m║[0m[0m
+[0;34;40m║                                                                      ║[0m
+[0;34;40m║ [4;36;40mENV DIR STRUCTURE                                                   [0;34;40m ║[0m
+[0;34;40m║[0;35;40m   # env label and automated shell injections                         [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   .name[0;37;40m                   short unique env name: /^[a-zA-Z0-9\-_]+$/ [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   aliases/[0;37;40m                auto aliases based on file names/data      [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   vars/[0;37;40m                   auto environ vars based on file names/data [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   scripts/[0;37;40m                auto added to \$PATH based on env depth     [0;34;40m║[0m[0m
+[0;34;40m║[0;35;40m   # automatc actions based on even (activate, up/down, run)          [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   init.d/[0;37;40m                 sources each file on first entry of env    [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   exit.d/[0;37;40m                 sources each file on exit from the env dir [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   up.d/[0;37;40m                   daemons to run on "go -u env" or "ae up"   [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   run.d/[0;37;40m                  short scripts/bins to run on "run"         [0;34;40m║[0m[0m
+[0;34;40m╙══════════════════════════════════════════════════════════════════════╜ [0m
+EOI
 }
 
 
 __autoenv_usage_sync() {
     lib_log "Usage: autoenv sync [ARGUMENTS] SYNCNAME [SYNCNAME2]"
     lib_log_raw "
-
 Sync files to the DIR given based on the target NAME(S). Requires you to set
 \$AUTOENV_SYNC_URL to a website that contains directories matching the
 SYNCNAME(S) given. Each directory must have an 'index.autoenv' file generated
@@ -124,43 +148,10 @@ Examples:
 "
 }
 
-__autoenv_usage_scan() {
-    lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
-    lib_log_raw "
-
-SCAN (automatic on directory change by default)
-
-Scans up to $__AUTOENV_SCAN_DEPTH parent directories to look for '.autoenv/'. If
-found, it is 'activated' until you 'cd' out of the path (or into a nested env).
-
-Additionally, each '.autoenv/' directory may contain:
-
-  .autoenv/
-    .name     - short, unique name of the env (e.g. /^[a-zA-Z0-9\-_]+$/);
-                this env is symlinked to by AUTOENV_ROOT/.autoenv/\$name
-    aliases/  - aliases to automatically define
-    cd.d/     - each script is executed in a subshell on \`cd\`; best kept light\!
-    exit.d/   - on exit, source each file (e.g. python venv deacivate)
-    init.d/   - on init, source each file (e.g. python venv activate)
-    run.d/    - scripts to run on 'autoenv up'; pid files for tracking
-    scripts/  - scripts to be appended to your \$PATH
-    vars/     - env vars are set for each file basd on contents
-
-By default scans are limited to your \$HOME directory. This can be overridden
-by the \$AUTOENV_ROOT environmental variable. Use with caution!
-
-Aliases and scripts in deeper nested envs take priority over parent envs. The
-deepest active venv will always have 'AUTOENV_ENV' pointing to the env
-directory, but aliases will also have 'AUTOENV_PENV' set to the specific env
-that is the parent of the alias definition.
-"
-}
-
 
 __autoenv_usage_add() {
     lib_log "Usage: autoenv add [ENV_DIR] [ENV_NAME]"
     lib_log_raw "
-
 Add tracking for the ENV_DIR (default: current directory) with the given ENV
 NAME (defaults to ENV_DIR/.name or basename ENV_DIR). Assumes that .autoenv/
 already exists in ENV_DIR.
@@ -173,7 +164,6 @@ Tracking is added to $__AUTOENV_ROOT/envs/ using ENV_NAME.
 __autoenv_usage_create() {
     lib_log "Usage: autoenv create [ENV_DIR] [ENV_NAME]"
     lib_log_raw "
-
 Create an env in the directory given (default: current directory) and with the
 name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
 to the ENV_DIR.
@@ -186,7 +176,6 @@ Automatically creates '.autoenv/{vars,aliases,exit.d,init.d,up.d}/' in ENV_DIR.
 __autoenv_usage_forget() {
     lib_log "Usage: autoenv forget [ENV_NAME]"
     lib_log_raw "
-
 Forget about an env (e.g. remove tracking from $__AUTOENV_ROOT/envs/). Inverse
 of 'add'.
 "
@@ -196,7 +185,6 @@ of 'add'.
 __autoenv_usage_file_index() {
     lib_log "Usage: autoenv file-index DIR [DIR2] [ARGS]"
     lib_log_raw "
-
 Scan the directories given for files and scripts to generate an
 'index.auto_env'. These can be uploaded alongside the files to use autoenv
 'sync' to quickly download elsewhere (e.g. to quickly init a home directory).
@@ -214,12 +202,46 @@ ARGS
 __autoenv_usage_edit() {
     lib_log "Usage: autoenv edit [WHAT] [WHICH]"
     lib_log_raw "
-
 Edit active (based on depth) env, optionally specifying what/which things to
 edit. Allows partial matches as long as arguments are unambiguous.
 "
 }
 
+__autoenv_usage_go() {
+    lib_log "Usage: autoenv go [-u|--up] [-r|--run] NAME"
+    lib_log_raw "
+Change directory to the env named and optionally start daemons and/or run
+all scripts.
+"
+}
+
+
+__autoenv_usage_run() {
+    lib_log "Usage: autoenv run [-d|--dryrun] [SCRIPT] [SCRIPT]"
+    lib_log_raw "
+Run scripts from 'run.d/' in alphabetical order. Failures are printed to
+stderr. May optionally run one or more specific scripts.
+"
+}
+
+
+__autoenv_usage_up() {
+    lib_log "Usage: autoenv up [-d|--dryrun] [DAEMON] [DAEMON]"
+    lib_log_raw "
+Run daemons from 'up.d/' in alphabetical order. Failures are printed to
+stderr. May optionally run one or more specific daemons. Tracks '\$daemon.pid'
+files in the 'up.d/' dir.
+"
+}
+
+
+__autoenv_usage_down() {
+    lib_log "Usage: autoenv down [-d|--dryrun] [DAEMON] [DAEMON]"
+    lib_log_raw "
+Edit active (based on depth) env, optionally specifying what/which things to
+edit. Allows partial matches as long as arguments are unambiguous.
+"
+}
 
 # ------------------------------------------------------------------------------
 # helpers
@@ -500,6 +522,7 @@ __autoenv_create() {
     local env_root="${1:-.}"
     local env_name="${2:-}"
 
+    # default to the name of the current folder
     [ -n "$env_name" ] || env_name=$(basename $(builtin cd "$env_root" && pwd -P))
     # avoid dupe names
     [ -L "$root_env_dir/envs/$env_name" ] && {
@@ -507,6 +530,7 @@ __autoenv_create() {
         return 1
     }
     # init the env
+    lib_confirm "Create '$env_name' in '$env_root'?" || return 1
     mkdir -p "$env_root/.autoenv/"{vars,aliases,exit.d,init.d,up.d} || {
         lib_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
@@ -561,6 +585,7 @@ __autoenv_add() {
 
 
 # remove autoenv tracking
+# $1 = env name
 __autoenv_forget() {
     local env_name="$1"
     local env_root
@@ -713,33 +738,57 @@ __autoenv_edit() {
 }
 
 
-# use nohup and tie-off std{in/out/err} to execute each script in a subshell
+# use nohup and tie-off std{in/out/err} to execute each daemon in a subshell
 # runs '.autoenv/up.d/*' in alphabetical order
+# usage: ae up [ARGS] ENV_DIR [DAEMON] [DAEMON]
 __autoenv_up() {
-    # FIXME - daemons vs scripts
-    local env_dir="$1"
-    local up_dir="$env_dir/.autoenv/up.d"
-    local script
+    local env_dir
+    local up_dir
+    local daemon
     local pid_file
+    local dry_run=0
+    local daemons=()
 
     [ -d "$up_dir" ] || return 0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -d|--dryrun)
+                dry_run=1
+                shift
+                ;;
+            *)
+                [ -z "$env_dir" ] \
+                    && env_dir="$1" \
+                    || daemons+=("$1")
+                ;;
+        esac
+        shift
+    done
+    [ -n "$env_dir" ] || {
+        lib_log_error "No env dir specified"
+        return 1
+    }
+    up_dir="$env_dir/.autoenv/up.d"
 
-    find $up_dir -maxdepth 1 \( -type f -o -type l \) \! -name .\* \
+    find $up_dir -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
         | sort \
-        | while read script; do
-            pid_file="$up_dir/.$script.pid"
+        | while read daemon; do
+            # wante specific ones only?
+            [ ${#daemon[*]} -gt 0 -a lib_in_list "${daemon:2}" -- "${daemons[@]}"
+            pid_file="$up_dir/.$daemon.pid"
             [ -s "$pid_file" ] && {
-                lib_log "PID file already exists for $script: $(<"$pid_file")"
+                lib_log "PID file already exists for $daemon: $(<"$pid_file")"
                 exit 1
             }
             (
                 cd "$env_dir" || exit 1
-                AUTOENV_ENV="$env_dir" nohup "$script" &>/dev/null </dev/null &
-                echo $! >> "$pid_file"
-                lib_log "started: $script"
+                AUTOENV_ENV="$env_dir" AUTOENV_PENV="$env_dir" \
+                    nohup "$daemon" &>/dev/null </dev/null &
+                echo $! > "$pid_file"
+                lib_log "started: $daemon"
                 wait
-                lib_log "ended: $script (retval=$?, pid=$(<"$pid_file"))"
-                rm "$pid_file"
+                lib_log "ended: $daemon (retval=$?, pid=$(<"$pid_file"))"
+                rm -f "$pid_file" &>/dev/null
             ) &
         done
     return 0
@@ -778,6 +827,38 @@ __autoenv_down() {
             [ $i -ge 10 ] && {
                 lib_log_error "Failed to kill $pid after 10 seconds; maybe run: kill -9 $pid"
             }
+        done
+    return 0
+}
+
+
+# run each script in the directory, in alphabetical order
+# runs '.autoenv/up.d/*' in alphabetical order
+__autoenv_run() {
+    local env_dir="$1"
+    local rundir="$env_dir/.autoenv/run.d"
+    local script
+    local pid_file
+
+    [ -d "$rundir" ] || return 0
+
+    find $rundir -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
+        | sort \
+        | while read script; do
+            pid_file="$rundir/.$script.pid"
+            [ -s "$pid_file" ] && {
+                lib_log "PID file already exists for $script: $(<"$pid_file")"
+                exit 1
+            }
+            (
+                cd "$env_dir" || exit 1
+                AUTOENV_ENV="$env_dir" nohup "$script" &>/dev/null </dev/null &
+                echo $! >> "$pid_file"
+                lib_log "started: $script"
+                wait
+                lib_log "ended: $script (retval=$?, pid=$(<"$pid_file"))"
+                rm "$pid_file"
+            ) &
         done
     return 0
 }
@@ -1433,18 +1514,6 @@ __autoenv() {
             }
             __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
-        scan)
-            lib_in_list "-h" "--help" -- "$@" && {
-                __autoenv_usage_scan
-                return
-            }
-            [ $# -ge 1 ] || {
-                lib_log_error "No args expected"
-                __autoenv_usage_scan
-                return 1
-            }
-            __autoenv_scan
-            ;;
         reload)
             # pop off one env at a time, starting at the end
             for ((i=${#__AUTOENV_ENVS[*]}-1; i>=0; i--)); do
@@ -1455,6 +1524,10 @@ __autoenv() {
             __autoenv_scan
             ;;
         go)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_go
+                return
+            }
             [ $# -eq 1 ] || {
                 lib_log_error "usage: go [-u|--up] NAME"
                 return 1
@@ -1462,10 +1535,18 @@ __autoenv() {
             __autoenv_go "$@" || return 1
             ;;
         up)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_up
+                return
+            }
             [ ${AUTOENV:-1} -ne 0 ] && \
                 __autoenv_up "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
         down)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_down
+                return
+            }
             [ ${AUTOENV:-1} -ne 0 ] && \
                 __autoenv_down "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
@@ -1529,4 +1610,5 @@ alias autoenv=__autoenv
 alias ae=__autoenv
 
 __autoenv_scan &>/dev/null
-__autoenv_env_info
+#__autoenv_env_info
+__autoenv_usage

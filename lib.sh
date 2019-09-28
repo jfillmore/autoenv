@@ -8,6 +8,9 @@
 # - choices - prompts/menus for choices, quick input matching against lists
 # - misc    - colors/colorful text
 
+# - TODO -
+# - narrow fuzzy match if multiple matched
+
 # set our logging tag based on env var, param, or finally whoever sourced us
 LIB_TAG="${LIB_TAG:-${1:-$(basename "$0")}}"
 
@@ -158,11 +161,11 @@ lib_prompt() {
     # read and optionally validate the input until we get something right
     [ $fuzzy_match -eq 1 ] && opts_msg=" (prefix match allowed)"
     [ $show_menu -eq 0 ] \
-        && msg="$msg$opts_msg$opts" \
+        && msg="$msg$opts_msg\033[0;33;40m$opts\033[0m" \
         || msg="Options$opts_msg:\033[1;34;40m$opts\033[0;0m\n$msg"
     while [ -z "$match" ]; do
         error=
-        echo -en "$line_break$msg > " >&2
+        echo -en "$line_break$msg \033[1;30;40m>\033[0m " >&2
         if [ "${#read_args[*]}" -eq 0 ]; then
             read user_input
         else
@@ -285,13 +288,44 @@ lib_match_one() {
     fi
 }
 
+
+# quickly confirm whether or not to do an action; return 1 if not. If a command
+# is given, automatically runs the command.
+# $1  = message
+# $2+ = command + args to run, if true
+lib_confirm() {
+    local msg
+    local choice
+    
+    [ $# -ge 1 ] || {
+        lib_log_error "Missing message to lib_confirm as first arg"
+        return 1
+    }
+    msg="$1"; shift
+    choice=$(lib_prompt $(lib_color white "$msg") -n 1 y n) || return 1
+    [ "$choice" = y ] && {
+        # got a command? run it!
+        [ $# -ge 1 ] && {
+            "$@"
+            return $?
+        }
+        return 0
+    }
+    return 1
+}
+
+
 # return 0 if any args prior to -- or == are found the rest of the args; else 1
 # if so and == is the pivot, the index (0-based) of the match and item matched
 # are printed to stdout separated by tabs
 # e.g.:
-# 1) lib_in_list foo bar == at the bar && echo "saw foo or bar"
-#    > 2	bar
-# 2) lib_in_list foo bar -- at the food bard || echo "did not see foo or bar"
+# 1) lib_in_list me you == at the bar is me && echo "saw me or you"
+#    > 4	me
+#    > saw me or you
+# 2) lib_in_list me you -- at the bar is sue and tom || echo "did not see me or you"
+#    > did not see me or you
+# 3) lib_in_list the foo -- at the bar is sue and tom && echo "saw the or foo"
+#    > saw the or foo
 lib_in_list() {
     local wanted=()
     local to_search=()
@@ -426,14 +460,19 @@ lib_color() {
     fi
 }
 
-# print columns of data, optionally using a prefix and suffex set of chars
-# -c|--color  COLOR_OR_CODE  - use the style given for the items
+# print columns of data, optionally using a prefix and suffex set of chars...
+# fun, but efficiency is rather limited.
+#
+# usage: lib_cols [ARGS] item [item2 ... itemN]
+#
+# -c|--color COLOR_OR_CODE   - use the style given for the items
 # -d|--delimiter STRING      - use a different delimeter than a double space
 # -h|--header HEADER
 # -m|--min                   - don't try to fit the full term width; if single
 #                              row, don't pad to max value width
 # -p|--prefix PREFIX
 # -s|--suffix SUFFIX
+# -w|--width NUM
 # $N = message strings
 #
 # e.g.:, assuming a super terminal width of ~55 chars

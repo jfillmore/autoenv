@@ -2,9 +2,9 @@
 
 Shell hacks to define nestable "envs" that automatically declare:
 
-- custom $PATH hacks
-- custom aliases
-- scripts to run on entering/exit a base directory
+- $PATH hacks for scripts
+- aliases
+- env vars
 
 ... and more!
 
