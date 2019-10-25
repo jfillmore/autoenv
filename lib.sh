@@ -302,7 +302,7 @@ lib_confirm() {
         return 1
     }
     msg="$1"; shift
-    choice=$(lib_prompt $(lib_color white "$msg") -n 1 y n) || return 1
+    choice=$(lib_prompt "$(lib_color white "$msg")" -n 1 y n) || return 1
     [ "$choice" = y ] && {
         # got a command? run it!
         [ $# -ge 1 ] && {
