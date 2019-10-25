@@ -9,7 +9,7 @@ Shell hacks to define nestable "envs" that automatically declare:
 ... and more!
 
 
-## Quick start:
+## Minimalist usage
 
 ```
 # snag the script
@@ -21,29 +21,28 @@ curl -s \
 source ~/.autoenv.sh
 
 # ensure it runs by default for interactive shells
-echo 'if [[ "$-" =~ 'i' ]]; then source ~/.auteoenv.sh; fi' >> ~/.bashrc
+echo 'if [[ "$-" =~ 'i' ]]; then source ~/.autoenv.sh; fi' >> ~/.bashrc
 ```
 
 
-## Advanced usage:
+## The JKF Way
 
 ```
-# clone the script
-mkdir -p ~/dev && cd ~/dev
-git clone https://github.com/jfillmore/autoenv.git
+# clone the repo
+mkdir -p ~/dev && cd ~/dev && git clone https://github.com/jfillmore/autoenv.git
 
 # initialize ourself
 source ~/dev/autoenv/autoenv.sh
 
-# set ourselves up to sync against an external source
-mkdir -p ~/.autoenv/vars/
+# setup a home env w/ a handy sync source
+ae add ~ home
 echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/' \
     > ~/.autoenv/vars/AUTOENV_SYNC_URL
-autoenv add ~ home
 
-# sync some useful default scripts
-autoenv sync bash vim
+# sync some useful default stuff
+ae reload
+(cd ~ && ae sync bash vim)
 
-# move autoenv to our new spot that our bash scripts will source from
-mv ~/autoenv.sh ~/.bashrc.d/
+# link autoenv to our new spot that our bash sessions will source
+ln ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
 ```

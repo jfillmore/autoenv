@@ -22,8 +22,8 @@ lib_fail() {
 }
 
 
-# run another command unless LIB_DRYRUN=1; note
-# always prints quoted commands+args when LIB_VERBOSE=1
+# run a command unless LIB_DRYRUN=1; always prints shell quoted commands+args
+# when LIB_VERBOSE=1
 lib_cmd() {
     if [ ${LIB_DRYRUN:-0} -eq 1 ]; then
         echo -e "\033[0;33;40m# $(printf "'%s' " "$@")\033[0m" >&2

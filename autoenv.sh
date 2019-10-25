@@ -4,7 +4,6 @@
 # - exec batches of aliases from known envs
 #   - serial (w/ basic bool logic) vs batch mode (supporting auto-restart), confirm w/ beep-alerts when waiting (e.g. notify function)
 #   - dry-run
-# - aliases requiring confirmation (e.g. aliases-confirm/ or special invoke method)
 
 
 # --- main internals --
@@ -27,6 +26,7 @@ __AUTOENV_CMDS=(
     help
     info
     reload
+    run
     sync
     up
 )
@@ -78,9 +78,9 @@ __autoenv_usage() {
 [0;34;40m║[1;36;40m long as only one match is found. Every command has a -h|--help arg.  [0;34;40m║[0m
 [0;34;40m║                                                                      ║[0m
 [0;34;40m║[0;33;40m   # generic                                                          [0;34;40m║[0m
-[0;34;40m║[1;33;40m   help[0;37;40m                      this info                                [0;34;40m║[0m[0m
-[0;34;40m║[1;33;40m   info[0;37;40m                      summarize known and active envs          [0;34;40m║[0m[0m
-[0;34;40m║[1;33;40m   reload[0;37;40m                    reinitialize all .envs along the path    [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   help[0;37;40m                     this info                                 [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   info[0;37;40m                     summarize known and active envs           [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   reload[0;37;40m                   reinitialize all .envs along the path     [0;34;40m║[0m[0m
 [0;34;40m║[0;33;40m   # env management (\$HOME/.autoenv/envs/* = NAME symlinks to envs)   [0;34;40m║[0m
 [0;34;40m║[1;33;40m   add[1;37;40m PATH [NAME]          [0;37;40madd existing env                          [0;34;40m║[0m
 [0;34;40m║[1;33;40m   create[1;37;40m PATH [NAME]       [0;37;40mcreate .autoenv dirs; print usage hints   [0;34;40m║[0m
@@ -104,13 +104,14 @@ __autoenv_usage() {
 [0;34;40m║[1;32;40m   AUTOENV_ENV[0;37;40m             auto set to deepest active env dir         [0;34;40m║[0m[0m
 [0;34;40m║[1;32;40m   AUTOENV_PENV[0;37;40m            auto set to parent env dir on alias defs   [0;34;40m║[0m[0m
 [0;34;40m║                                                                      ║[0m
-[0;34;40m║ [4;36;40mENV DIR STRUCTURE                                                   [0;34;40m ║[0m
+[0;34;40m║ [4;36;40mAUTOENV DIR STRUCTURE                                               [0;34;40m ║[0m
 [0;34;40m║[0;35;40m   # env label and automated shell injections                         [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   .name[0;37;40m                   short unique env name: /^[a-zA-Z0-9\-_]+$/ [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   aliases/[0;37;40m                auto aliases based on file names/data      [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   vars/[0;37;40m                   auto environ vars based on file names/data [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   scripts/[0;37;40m                auto added to \$PATH based on env depth     [0;34;40m║[0m[0m
-[0;34;40m║[0;35;40m   # automatc actions based on even (activate, up/down, run)          [0;34;40m║[0m[0m
+[0;34;40m║[0;35;40m   # automatc actions based on events (activate, up/down, run)        [0;34;40m║[0m[0m
+[0;34;40m║[1;35;40m   cd.d/[0;37;40m                   run each script in a subshell on 'cd'      [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   init.d/[0;37;40m                 sources each file on first entry of env    [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   exit.d/[0;37;40m                 sources each file on exit from the env dir [0;34;40m║[0m[0m
 [0;34;40m║[1;35;40m   up.d/[0;37;40m                   daemons to run on "go -u env" or "ae up"   [0;34;40m║[0m[0m
@@ -168,7 +169,7 @@ Create an env in the directory given (default: current directory) and with the
 name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
 to the ENV_DIR.
 
-Automatically creates '.autoenv/{vars,aliases,exit.d,init.d,up.d}/' in ENV_DIR.
+Automatically creates '.autoenv/{vars,aliases,cd.d,exit.d,init.d,up.d}/' in ENV_DIR.
 "
 }
 
@@ -226,20 +227,23 @@ stderr. May optionally run one or more specific scripts.
 
 
 __autoenv_usage_up() {
-    lib_log "Usage: autoenv up [-d|--dryrun] [DAEMON] [DAEMON]"
+    lib_log "Usage: autoenv up [-d|--dryrun] [-f|--force] [DAEMON] [DAEMON]"
     lib_log_raw "
 Run daemons from 'up.d/' in alphabetical order. Failures are printed to
-stderr. May optionally run one or more specific daemons. Tracks '\$daemon.pid'
-files in the 'up.d/' dir.
+stderr. May optionally run one or more specific daemons. Tracks '.\$daemon.pid'
+files in the 'up.d/' dir. Skips daemons with PID files unless --force is used.
 "
 }
 
 
 __autoenv_usage_down() {
-    lib_log "Usage: autoenv down [-d|--dryrun] [DAEMON] [DAEMON]"
+    lib_log "Usage: autoenv down [-d|--dryrun] [-c|--children] [DAEMON] [DAEMON]"
     lib_log_raw "
-Edit active (based on depth) env, optionally specifying what/which things to
-edit. Allows partial matches as long as arguments are unambiguous.
+Stop daemons started from 'up.d/' in alphabetical order. Failures are printed to
+stderr. May optionally stop one or more specific daemons. Uses '.\$daemon.pid'
+files in the 'up.d/' dir to determine who is running. If --children is given,
+child processes will be terminated directly first, likely indirectly ending the
+daemon.
 "
 }
 
@@ -544,7 +548,7 @@ __autoenv_create() {
 }
 
 
-# add an existing .autoenv dir to $__AUTOENV_ROOT/.autoenv/envs and sets .autoenv/.name
+# add an existing .autoenv dir to $__AUTOENV_ROOT/.autoenv/envs and sets .autoenv/.name; ensures all autoenv dirs exist[
 # $1 = root directory for the env (default .)
 # $2 = name of the env (default .autoenv/.name)
 __autoenv_add() {
@@ -618,7 +622,6 @@ __autoenv_edit() {
         '(a)lias'
         '(e)xit script'
         '(i)nit script'
-        '(r)un script'
         '(s)cript'
         '(v)ar'
     )
@@ -662,12 +665,6 @@ __autoenv_edit() {
             ;;
         init\ script)
             path="$AUTOENV_ENV/.autoenv/init.d"
-            mkdir -p "$path" &>/dev/null
-            find_args+=(-perm -u+x)
-            needs_exec=1
-            ;;
-        run\ script)
-            path="$AUTOENV_ENV/.autoenv/run.d"
             mkdir -p "$path" &>/dev/null
             find_args+=(-perm -u+x)
             needs_exec=1
@@ -748,13 +745,12 @@ __autoenv_up() {
     local pid_file
     local dry_run=0
     local daemons=()
+    local pid
 
-    [ -d "$up_dir" ] || return 0
     while [ $# -gt 0 ]; do
         case "$1" in
             -d|--dryrun)
                 dry_run=1
-                shift
                 ;;
             *)
                 [ -z "$env_dir" ] \
@@ -769,97 +765,158 @@ __autoenv_up() {
         return 1
     }
     up_dir="$env_dir/.autoenv/up.d"
+    [ -d "$up_dir" ] || return 0
 
-    find $up_dir -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
+    find "$up_dir" -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
         | sort \
         | while read daemon; do
-            # wante specific ones only?
-            [ ${#daemon[*]} -gt 0 -a lib_in_list "${daemon:2}" -- "${daemons[@]}"
+            daemon=$(basename "$daemon")
+            # want specific ones only?
+            if [ ${#daemons[*]} -gt 0 ]; then
+                lib_in_list "$daemon" -- "${daemons[@]}" || continue
+            fi
             pid_file="$up_dir/.$daemon.pid"
             [ -s "$pid_file" ] && {
-                lib_log "PID file already exists for $daemon: $(<"$pid_file")"
-                exit 1
+                lib_log "$daemon is already running (PID: $(<"$pid_file"))"
+                continue
             }
+            [ $dry_run -eq 1 ] && {
+                lib_log "\033[0;36;40mDRY RUN:\033[0;34;40m AUTOENV_ENV=\"$env_dir\" AUTOENV_PENV=\"$env_dir\" nohup \"$up_dir/$daemon\" &>/dev/null </dev/null &"
+                continue
+            }
+            lib_log "starting: $daemon"
             (
                 cd "$env_dir" || exit 1
                 AUTOENV_ENV="$env_dir" AUTOENV_PENV="$env_dir" \
-                    nohup "$daemon" &>/dev/null </dev/null &
-                echo $! > "$pid_file"
-                lib_log "started: $daemon"
-                wait
+                    nohup "$up_dir/$daemon" &>/dev/null </dev/null &
+                pid=$!
+                echo $pid > "$pid_file"
+                wait $pid
                 lib_log "ended: $daemon (retval=$?, pid=$(<"$pid_file"))"
                 rm -f "$pid_file" &>/dev/null
             ) &
         done
+    
     return 0
 }
 
 
 # sends a sig-kill to each .pid files in autoenv/up.d
+# usage: ae down [ARGS] ENV_DIR [DAEMON] [DAEMON]
 __autoenv_down() {
-    # FIXME - daemons vs scripts
-    local env_dir="$1"
-    local up_dir="$env_dir/.autoenv/up.d"
-    local script
+    local env_dir
+    local up_dir
+    local daemon
+    local pid_file
     local pid
     local i
+    local dry_run=0
+    local daemons=()
+    local children
+    local children_first=0
+    local c_pids=()
 
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -d|--dryrun)
+                dry_run=1
+                ;;
+            -c|--children)
+                children_first=1
+                ;;
+            *)
+                [ -z "$env_dir" ] \
+                    && env_dir="$1" \
+                    || daemons+=("$1")
+                ;;
+        esac
+        shift
+    done
+    [ -n "$env_dir" ] || {
+        lib_log_error "No env dir specified"
+        return 1
+    }
+    up_dir="$env_dir/.autoenv/up.d"
     [ -d "$up_dir" ] || return 0
 
-    find $up_dir -maxdepth 1 -name .\*.pid \
-        | while read pid_file; do
-            pid=$(<"$pid_file")
-            # clean up crashed PIDs
-            ps -p "$pid" &>/dev/null || {
-                lib_log_error "No active PID running: $pid; clearing .pid file"
-                rm "$pid_file" || lib_log_error "Failed to remove PID file: $pid_file"
-                continue
-            }
-            __autoenv_debug "Killing $pid from $pid_file"
-            kill "$pid"
+    find "$up_dir" -maxdepth 1 -name .\*.pid | sort | while read pid_file; do
+        pid_file="$(basename "$pid_file")"
+        pid=$(<"$up_dir/$pid_file")
+        daemon="${pid_file:1:${#pid_file}-5}"
+        if [ ${#daemons[*]} -gt 0 ]; then
+            lib_in_list "$daemon" -- "${daemons[@]}" || continue
+        fi
+        # clean up crashed PIDs
+        ps -p "$pid" &>/dev/null || {
+            lib_log_error "No daemon running for $daemon (PID $pid); clearing '$pid_file'"
+            rm -f "$pid_file" || lib_log_error "Failed to remove PID file: $pid_file"
+            continue
+        }
+        children="$(ps -o ppid,pid,command | grep "^$pid " | cut -f2- -d ' ')"
+        c_pids=($(echo "$children" | awk '{print $1}'))
+        lib_log "killing $daemon (PID $pid); children:\n$children"
+        [ $dry_run -eq 1 ] && {
+            [ ${#c_pids[*]} -gt 0 -a $children_first -eq 1 ] && \
+                lib_log "\033[0;36;40mDRY RUN:\033[0;34;40m kill ${c_pids[*]}"
+            lib_log "\033[0;36;40mDRY RUN:\033[0;34;40m kill $pid"
+            continue
+        }
+        [ ${#c_pids[*]} -gt 0 -a $children_first -eq 1 ] && {
+            kill "${c_pids[@]}"
+        }
+        kill "$pid" &>/dev/null
+    done
 
-            # ensure it shutsdown clean (and timely)
-            while [ $i -lt 10 ]; do
-                sleep 1
-                ps -p "$pid" &>/dev/null || break
-                let i+=1
-            done
-            [ $i -ge 10 ] && {
-                lib_log_error "Failed to kill $pid after 10 seconds; maybe run: kill -9 $pid"
-            }
-        done
     return 0
 }
 
 
 # run each script in the directory, in alphabetical order
-# runs '.autoenv/up.d/*' in alphabetical order
+# $1 = env dir to run scripts from
+# -d|--dryrun = just print what would be ran
+# $2... = specific things to run, if any
 __autoenv_run() {
-    local env_dir="$1"
-    local rundir="$env_dir/.autoenv/run.d"
+    local env_dir
+    local run_dir
     local script
-    local pid_file
+    local dry_run=0
+    local scripts=()
 
-    [ -d "$rundir" ] || return 0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -d|--dryrun)
+                dry_run=1
+                ;;
+            *)
+                [ -z "$env_dir" ] \
+                    && env_dir="$1" \
+                    || scripts+=("$1")
+                ;;
+        esac
+        shift
+    done
+    [ -n "$env_dir" ] || {
+        lib_log_error "No env dir specified"
+        return 1
+    }
+    run_dir="$env_dir/.autoenv/run.d"
+    [ -d "$run_dir" ] || return 0
 
-    find $rundir -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
+    find "$run_dir" -maxdepth 1 -perm +111 \( -type f -o -type l \) \! -name .\* \
         | sort \
         | while read script; do
-            pid_file="$rundir/.$script.pid"
-            [ -s "$pid_file" ] && {
-                lib_log "PID file already exists for $script: $(<"$pid_file")"
-                exit 1
+            script=$(basename "$script")
+            if [ ${#scripts[*]} -gt 0 ]; then
+                 lib_in_list "$script" -- "${scripts[@]}" || continue
+            fi
+            [ $dry_run -eq 1 ] && {
+                lib_log "\033[0;36;40mDRY RUN:\033[0;34;40m AUTOENV_ENV=\"$env_dir\" \"$run_dir/$script\""
+                continue
             }
-            (
-                cd "$env_dir" || exit 1
-                AUTOENV_ENV="$env_dir" nohup "$script" &>/dev/null </dev/null &
-                echo $! >> "$pid_file"
-                lib_log "started: $script"
-                wait
-                lib_log "ended: $script (retval=$?, pid=$(<"$pid_file"))"
-                rm "$pid_file"
-            ) &
+            lib_log "running '$script'"
+            AUTOENV_ENV="$env_dir" "$run_dir/$script"
         done
+
     return 0
 }
 
@@ -1150,45 +1207,62 @@ __autoenv_log_env_info() {
     local depth="$1"
     local i item
     local items
+    local pid
     local env_dir="${__AUTOENV_ENVS[depth]}"
 
-    lib_log "$(($depth + 1)). ──══╝ $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) ╚══─── $(lib_color white "$env_dir" white)" '0;36;40'
+    lib_log "$(($depth + 1)). ─═« $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) »═─ $(lib_color white "$env_dir" white)" '0;36;40'
 
     items=()
     for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
         item="${__AUTOENV_VARS[i]}"
-        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
+        [ "${item%%:*}" = "$depth" ] && items+=("${item##*:}")
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-        -h "\033[0;32;40m         ░▒▌EnvVars▐▒░ " \
+        -h "\033[0;32;40m  ░▒▌EnvVars▐▒░ " \
         -c lime \
         "${items[@]}" >&2
 
     items=()
     for ((i=0; i<${#__AUTOENV_ALIASES[*]}; i++)); do
         item="${__AUTOENV_ALIASES[i]}"
-        [ "${item%%:*}" = "$depth" ] && items[${#items[*]}]="${item##*:}"
+        [ "${item%%:*}" = "$depth" ] && items+=("${item##*:}")
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-        -h "\033[0;33;40m         ░▒▌Aliases▐▒░ " \
+        -h "\033[0;33;40m  ░▒▌Aliases▐▒░ " \
         -c lemon \
         "${items[@]}"
 
-    (
-        [ -d "$env_dir/.autoenv/scripts/" ] && {
-            items=()
-            for item in "$env_dir/.autoenv/scripts/"*; do
-                # ignore non-scripts and potential unmatched wildcard
-                [ -x "$item" ] && {
-                    items[${#items[*]}]="$(basename "$item")"
-                }
-            done
-            [ ${#items[*]} -gt 0 ] && lib_cols --min \
-                 -h "\033[0;31;40m         ░▒▌Scripts▐▒░ " \
-                 -c pink \
-                 "${items[@]}"
+    items=()
+    for item in "$env_dir/.autoenv/scripts/"*; do
+        # ignore non-scripts and potential unmatched wildcard
+        [ -x "$item" ] && {
+            items+=("$(basename "$item")")
         }
-    )
+    done
+    [ ${#items[*]} -gt 0 ] && lib_cols --min \
+         -h "\033[0;31;40m  ░▒▌Scripts▐▒░ " \
+         -c pink \
+         "${items[@]}"
+
+
+    items=()
+    for item in "$env_dir/.autoenv/up.d/"*; do
+        # ignore non-scripts and potential unmatched wildcard
+        [ -x "$item" ] && {
+            item="$(basename "$item")"
+            [ -s "$env_dir/.autoenv/up.d/.$item.pid" ] && {
+                pid=$(<"$env_dir/.autoenv/up.d/.$item.pid")
+                ps -p "$pid" &>/dev/null \
+                    && item="$item ($pid)" \
+                    || item="$item ($pid?)"
+            }
+            items+=("$item")
+        }
+    done
+    [ ${#items[*]} -gt 0 ] && lib_cols --min \
+         -h "\033[0;35;40m  ░▒▌Daemons▐▒░ " \
+         -c fushia \
+         "${items[@]}"
 }
 
 
@@ -1230,8 +1304,8 @@ __autoenv_init() {
             __AUTOENV_VARS+=("$depth:$name")
             # does a nested env have this same var defined?
             item="$(__autoenv_first_above "$name" "$depth" "${__AUTOENV_VARS[@]}")"
-            [ -z "$item" ] \
-                && export "$name"="$(<"$env_dir/.autoenv/vars/$name")"
+            [ -n "$item" ] && continue
+            export "$name"="$(<"$env_dir/.autoenv/vars/$name")"
         done
     }
 
@@ -1241,7 +1315,8 @@ __autoenv_init() {
             __AUTOENV_ALIASES+=("$depth:$name")
             # does a nested env have this same alias defined?
             item="$(__autoenv_first_above "$name" "$depth" "${__AUTOENV_ALIASES[@]}")"
-            [ -z "$item" ] && alias "$name"="AUTOENV_PENV='$env_dir' $(<"$env_dir/.autoenv/aliases/$name")"
+            [ -n "$item" ] && continue
+            alias "$name"="AUTOENV_PENV='$env_dir' $(<"$env_dir/.autoenv/aliases/$name")"
         done
     }
 
@@ -1259,7 +1334,7 @@ __autoenv_init() {
     [ -d "$env_dir/.autoenv/init.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/init.d/"); do
             lib_log "   $(lib_color purple '»»' fushia) . init.d/$name" '1;35;40'
-            # many scripts use sloppy var handline, so ignore this
+            # many scripts use sloppy var handling, so ignore this
             set +u
             source "$env_dir/.autoenv/init.d/$name" \
                 || lib_log_error "Failed to run env init script '$name'"
@@ -1269,7 +1344,7 @@ __autoenv_init() {
     }
 
     # we may have init'd out-of-order, so always point to the last env
-    AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
+    export AUTOENV_ENV="${__AUTOENV_ENVS[@]: -1}"
 
     return 0
 }
@@ -1523,6 +1598,14 @@ __autoenv() {
             # and initialize any found in the current dir (possibly less than we had before)
             __autoenv_scan
             ;;
+        run)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_run
+                return
+            }
+            [ ${AUTOENV:-1} -ne 0 ] && \
+                __autoenv_run "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
+            ;;
         go)
             lib_in_list "-h" "--help" -- "$@" && {
                 __autoenv_usage_go
@@ -1610,5 +1693,4 @@ alias autoenv=__autoenv
 alias ae=__autoenv
 
 __autoenv_scan &>/dev/null
-#__autoenv_env_info
-__autoenv_usage
+__autoenv_env_info
