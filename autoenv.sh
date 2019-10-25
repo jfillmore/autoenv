@@ -959,8 +959,9 @@ __autoenv_sync() {
         }
     # do everything in subshells to minimize env polution
     (
-    local target base_dir file_name exec_bit checksum path tmp_path \
+    local target i base_dir file_name exec_bit checksum path tmp_path \
         new_checksum old_checksum preview_lines file_changed
+    AUTOENV=0  # disable automated stuff while moving around
     cd "$target_dir" || {
         lib_log "Failed to change to sync directory '$target_dir'."
         exit 1
@@ -968,8 +969,8 @@ __autoenv_sync() {
     [ $verbose -eq 1 ] && { AUTOENV_DEBUG=1; LIB_VERBOSE=1; }
 
     # for each target download the autoenv index and listed files
-    while [ $# -gt 0 ]; do
-        target="$1" && shift
+    for ((i=0; i<${#target_names[*]}; i++)); do
+        target="${target_names[i]}" && shift
         __autoenv_debug "Downloading index list for '$target'"
         # download all the files listed
         $http "$sync_src/$target/index.autoenv" | while read exec_bit checksum path; do

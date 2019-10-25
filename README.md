@@ -35,14 +35,14 @@ mkdir -p ~/dev && cd ~/dev && git clone https://github.com/jfillmore/autoenv.git
 source ~/dev/autoenv/autoenv.sh
 
 # setup a home env w/ a handy sync source
-ae add ~ home
+yes | ae create ~ home
 echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/' \
     > ~/.autoenv/vars/AUTOENV_SYNC_URL
 
 # sync some useful default stuff
 ae reload
-(cd ~ && ae sync bash vim)
+(cd ~ && ae sync -v bash vim)
 
 # link autoenv to our new spot that our bash sessions will source
-ln ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
+mkdir ~/.bashrc.d && ln -s ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
 ```
