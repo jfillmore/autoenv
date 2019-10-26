@@ -1,15 +1,11 @@
 # AUTOENV
 
-Shell hacks to define nestable "envs" that automatically declare:
-
-- $PATH hacks for scripts
-- aliases
-- env vars
-
-... and more!
+![usage info|https://raw.githubusercontent.com/jfillmore/autoenv-home/master/ae-usage.png]
 
 
-## Minimalist usage
+## Minimalist Usage
+
+Add autoenv to an otherwise unmodified environment.
 
 ```
 # snag the script
@@ -27,9 +23,11 @@ echo 'if [[ "$-" =~ 'i' ]]; then source ~/.autoenv.sh; fi' >> ~/.bashrc
 
 ## The JKF Way
 
+Initialize things with a nice bash config, vim configs, and usefule scripts.
+
 ```
 # clone the repo
-mkdir -p ~/dev && cd ~/dev && git clone https://github.com/jfillmore/autoenv.git
+(mkdir -p ~/dev && cd ~/dev && git clone https://github.com/jfillmore/autoenv.git)
 
 # initialize ourself
 source ~/dev/autoenv/autoenv.sh
@@ -44,5 +42,8 @@ ae reload
 (cd ~ && ae sync -v bash vim)
 
 # link autoenv to our new spot that our bash sessions will source
-mkdir ~/.bashrc.d && ln -s ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
+ln -s ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
+
+# re-init our shell
+. ~/.bashrc
 ```
