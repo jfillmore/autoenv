@@ -133,6 +133,7 @@ by the 'file-index' autoenv command. Uses 'curl' by default but falls back to
 ARGUMENTS:
 
   -h|--help         This information
+  -d|--dryrun       Download and check files, but don't replace existing ones
   -v|--verbose      Print verbose sync information
 
 SYNCNAME            Upstream name of target folder to sync locally (repeatable)
@@ -473,6 +474,10 @@ __autoenv_http_agent() {
 
 
 # make an HTTP call and optionally save output to a file
+# -a|--agent AGENT   Agent to use; autodetects by default
+# -o|--output PATH   Save output to a file; requires curl or wget
+# $1 = URL to request
+# $2... = extra arguments
 __autoenv_http() {
     local agent
     local url
@@ -482,6 +487,14 @@ __autoenv_http() {
     # get agent/url and any extra args
     while [ $# -gt 0 ]; do
         case "$1" in
+            -a|--agent)
+                [ $# -ge 1 ] || {
+                    lib_log_error "missing arg to __autoenv_http -a|--agent"
+                    return 1
+                }
+                agent="$2"
+                shift
+                ;;
             -o|--output)
                 [ $# -ge 1 ] || {
                     lib_log_error "missing arg to __autoenv_http -o|--output"
@@ -491,9 +504,7 @@ __autoenv_http() {
                 shift
                 ;;
             *)
-                if [ -n "$agent" ]; then
-                    agent="$1"
-                elif [ -n "$url" ]; then
+                if [ -z "$url" ]; then
                     url="$1"
                 else
                     args+=("$1")
@@ -502,14 +513,20 @@ __autoenv_http() {
         esac
         shift
     done
+    [ -n "$agent" ] || agent=$(__autoenv_http_agent)
 
-    [ -n "$agent" -a -n "$url" ] || {
-        lib_log_error "Either agent or URL arguments are missing"
+    [ -n "$url" ] || {
+        lib_log_error "No URL given to download"
         return 1
     }
     args+=("$url")
-    [ -n "$output_file" ] && args+=(-o "$output_file")
-    "$agent" "${args[@]}"
+    [ -n "$output_file" ] && {
+        [ "${agent%%curl*}" != "$agent" ] \
+            && args+=(-o "$output_file") \
+            || args+=(-O "$output_file")  # wget
+    }
+    # unquoted on purpose... we'll possibly have args
+    $agent "${args[@]}"
 }
 
 
@@ -929,8 +946,8 @@ __autoenv_sync() {
     local target_dir
     local verbose=0
     local target_names=()
-    local http=$(__autoenv_http_agent) || return 1
     local sync_src="${AUTOENV_SYNC_URL:-}"
+    local dryrun=0
     [ -n "$sync_src" ] || {
         lib_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories."
         return 1
@@ -942,8 +959,11 @@ __autoenv_sync() {
             -v|--verbose)
                 verbose=1
                 ;;
+            -d|--dryrun)
+                dryrun=1
+                ;;
             *)
-                [ -n "$target_dir" ] \
+                [ -z "$target_dir" ] \
                     && target_dir="$1" \
                     || target_names+=("$1")
         esac
@@ -967,31 +987,30 @@ __autoenv_sync() {
         exit 1
     }
     [ $verbose -eq 1 ] && { AUTOENV_DEBUG=1; LIB_VERBOSE=1; }
+    [ $dryrun -eq 1 ] && { LIB_DRYRUN=1; }
 
     # for each target download the autoenv index and listed files
     for ((i=0; i<${#target_names[*]}; i++)); do
-        target="${target_names[i]}" && shift
+        target="${target_names[i]}"
+        # kill any extra slashes at the end
+        target="${target%%/}"
         __autoenv_debug "Downloading index list for '$target'"
-        # download all the files listed
-        $http "$sync_src/$target/index.autoenv" | while read exec_bit checksum path; do
+        # download all the files listed in the index
+        __autoenv_http "$sync_src/$target/index.autoenv" | while read exec_bit checksum path; do
             __autoenv_debug "fetching file '$path'"
             # normalize the path to clean extra slashes, preceding periods
-            path=$(echo $path | sed 's#//*#/#g' | sed 's#^\./##')
-            base_dir=$(dirname "$path") || lib_fail "Failed to get base directory of '$path'."
-            file_name=$(basename "$path") || lib_fail "Failed to get file name of '$path'."
+            path="$(echo "$path" | sed 's#//*#/#g' | sed 's#^\./##')"
+            base_dir="$(dirname "$path")" || lib_fail "Failed to get base directory of '$path'."
+            file_name="$(basename "$path")" || lib_fail "Failed to get file name of '$path'."
             tmp_path="$base_dir/.$file_name.autoenv-sync.$$"
-            __autoenv_http "$http" "$sync_src/$target/$path" -o "$tmp_path" \
+            __autoenv_http "$sync_src/$target/$path" -o "$tmp_path" \
                 || {
                     rm "$tmp_path" &>/dev/null
-                    lib_log_error "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
-                    exit 1
+                    lib_fail "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
                 }
             # does the checksum match?
             new_checksum=$($shasum "$tmp_path" | awk '{print $1}') \
-                || {
-                    lib_log_error "Failed to generate checksum for '$path'."
-                    exit 1
-                }
+                || lib_fail "Failed to generate checksum for '$path'."
             if [ "$new_checksum" != "$checksum" ]; then
                 preview_lines=6
                 __autoenv_debug "-- File checksum mismatch (first $preview_lines lines)"
@@ -999,11 +1018,8 @@ __autoenv_sync() {
                 head -n $preview_lines "$tmp_path" | __autoenv_debug
                 __autoenv_debug "------------------------------------------"
                 # file failed to download... odd. Permissions/misconfig, perhaps?
-                {
-                    rm "$tmp_path" &>/dev/null
-                    lib_log_error "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
-                    exit 1
-                }
+                rm "$tmp_path" &>/dev/null
+                lib_fail "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
             fi
             # do we have this file already, and with a matching checksum?
             file_changed=1
@@ -1011,8 +1027,7 @@ __autoenv_sync() {
                 old_checksum=$($shasum "$base_dir/$file_name" | awk '{print $1}') \
                     || {
                         rm "$tmp_path" &>/dev/null
-                        lib_log_error "Failed to generate checksum for existing copy of '$path'."
-                        exit 1
+                        lib_fail "Failed to generate checksum for existing copy of '$path'."
                     }
                 if [ "$old_checksum" = "$checksum" ]; then
                     __autoenv_debug "-- skipping unchanged file"
@@ -1027,8 +1042,7 @@ __autoenv_sync() {
                     chmod u+x "$base_dir/$file_name" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            lib_log_error "Failed to chmod 'u+x' file '$base_dir/$file_name'."
-                            exit 1
+                            lib_fail "Failed to chmod 'u+x' file '$base_dir/$file_name'."
                         }
                 fi
             fi
@@ -1039,25 +1053,23 @@ __autoenv_sync() {
                     chmod u+x "$tmp_path" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            lib_log_error "Failed to chmod 'u+x' file '$tmp_path'."
-                            exit 1
+                            lib_fail "Failed to chmod 'u+x' file '$tmp_path'."
                         }
                 fi
                 # create any leading directories if needed
                 if [ "$base_dir" != '.' ]; then
-                    mkdir -p "$base_dir" \
+                    lib_cmd mkdir -p "$base_dir" \
                         || {
                             rm "$tmp_path" &>/dev/null
-                            lib_log_error "Failed to create base directory '$base_dir'."
-                            exit 1
+                            lib_fail "Failed to create base directory '$base_dir'."
                         }
                 fi
                 # and move it into place
-                mv "$tmp_path" "$base_dir/$file_name" || {
+                lib_cmd mv "$tmp_path" "$base_dir/$file_name" || {
                     rm "$tmp_path" &>/dev/null
-                    lib_log_error "Failed to move '$tmp_path' to '$base_dir/$file_name'."
-                    exit 1
+                    lib_fail "Failed to move '$tmp_path' to '$base_dir/$file_name'."
                 }
+                [ $dryrun -eq 1 ] && rm "$tmp_path" &>/dev/null
             fi
         done
     done

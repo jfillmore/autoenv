@@ -36,7 +36,7 @@ source ~/dev/autoenv/autoenv.sh
 
 # setup a home env w/ a handy sync source
 yes | ae create ~ home
-echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/' \
+echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/master' \
     > ~/.autoenv/vars/AUTOENV_SYNC_URL
 
 # sync some useful default stuff
