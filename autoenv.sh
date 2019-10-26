@@ -170,7 +170,8 @@ Create an env in the directory given (default: current directory) and with the
 name given (default: directory base name). Links ${__AUTOENV_ROOT}/envs/\$ENV_NAME
 to the ENV_DIR.
 
-Automatically creates '.autoenv/{vars,aliases,cd.d,exit.d,init.d,up.d}/' in ENV_DIR.
+Automatically creates '.autoenv/{vars,aliases,cd.d,exit.d,init.d,up.d,run.d}/'
+in ENV_DIR.
 "
 }
 
@@ -1002,7 +1003,7 @@ __autoenv_sync() {
             path="$(echo "$path" | sed 's#//*#/#g' | sed 's#^\./##')"
             base_dir="$(dirname "$path")" || lib_fail "Failed to get base directory of '$path'."
             file_name="$(basename "$path")" || lib_fail "Failed to get file name of '$path'."
-            tmp_path="$base_dir/.$file_name.autoenv-sync.$$"
+            tmp_path=".$file_name.autoenv-sync.$$"
             __autoenv_http "$sync_src/$target/$path" -o "$tmp_path" \
                 || {
                     rm "$tmp_path" &>/dev/null
@@ -1015,7 +1016,7 @@ __autoenv_sync() {
                 preview_lines=6
                 __autoenv_debug "-- File checksum mismatch (first $preview_lines lines)"
                 __autoenv_debug "------------------------------------------"
-                head -n $preview_lines "$tmp_path" | __autoenv_debug
+                head -n $preview_lines "$tmp_path" >&2
                 __autoenv_debug "------------------------------------------"
                 # file failed to download... odd. Permissions/misconfig, perhaps?
                 rm "$tmp_path" &>/dev/null
@@ -1038,7 +1039,7 @@ __autoenv_sync() {
                     -a $exec_bit = '1' \
                     -a ! -x "$base_dir/$file_name" \
                     ]; then
-                    __autoenv_debug "-- toggling execution bit"
+                    __autoenv_debug "-- toggling execution bit on"
                     chmod u+x "$base_dir/$file_name" \
                         || {
                             rm "$tmp_path" &>/dev/null
@@ -1069,8 +1070,9 @@ __autoenv_sync() {
                     rm "$tmp_path" &>/dev/null
                     lib_fail "Failed to move '$tmp_path' to '$base_dir/$file_name'."
                 }
-                [ $dryrun -eq 1 ] && rm "$tmp_path" &>/dev/null
             fi
+            # didn't change or it was a dry run? still be sure to cleanup
+            [ -f "$tmp_path" ] && rm "$tmp_path" &>/dev/null
         done
     done
     )
