@@ -1,6 +1,6 @@
 # AUTOENV
 
-![usage info|https://raw.githubusercontent.com/jfillmore/autoenv-home/master/ae-usage.png]
+![usage info](https://raw.githubusercontent.com/jfillmore/autoenv-home/master/ae-usage.png)
 
 
 ## Minimalist Usage
