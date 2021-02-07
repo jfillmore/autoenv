@@ -27,10 +27,10 @@ Initialize things with a nice bash config, vim configs, and usefule scripts.
 
 ```
 # clone the repo
-(mkdir -p ~/dev && cd ~/dev && git clone https://github.com/jfillmore/autoenv.git)
+(mkdir -p ~/dev/jkf && cd ~/dev/jkf && git clone https://github.com/jfillmore/autoenv.git)
 
 # initialize ourself
-source ~/dev/autoenv/autoenv.sh
+source ~/dev/jkf/autoenv/autoenv.sh
 
 # setup a home env w/ a handy sync source
 yes | ae create ~ home
@@ -42,7 +42,7 @@ ae reload
 (cd ~ && ae sync -v bash vim)
 
 # link autoenv to our new spot that our bash sessions will source
-ln -s ~/dev/autoenv/autoenv.sh ~/.bashrc.d/
+ln -s ~/dev/jkf/autoenv/autoenv.sh ~/.bashrc.d/
 
 # re-init our shell
 . ~/.bashrc

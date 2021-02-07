@@ -223,7 +223,8 @@ __autoenv_usage_run() {
     lib_log "Usage: autoenv run [-d|--dryrun] [SCRIPT] [SCRIPT]"
     lib_log_raw "
 Run scripts from 'run.d/' in alphabetical order. Failures are printed to
-stderr. May optionally run one or more specific scripts.
+stderr. May optionally run one or more specific scripts.  The working directory
+will be the env dir.
 "
 }
 
@@ -234,6 +235,7 @@ __autoenv_usage_up() {
 Run daemons from 'up.d/' in alphabetical order. Failures are printed to
 stderr. May optionally run one or more specific daemons. Tracks '.\$daemon.pid'
 files in the 'up.d/' dir. Skips daemons with PID files unless --force is used.
+The working directory will be the env dir.
 "
 }
 
@@ -1380,7 +1382,9 @@ __autoenv_exit() {
     [ -d "$env_dir/.autoenv/exit.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/exit.d/"); do
             lib_log "   $(lib_color purple '««' fushia) . exit.d/$name" '0;35;40'
+            set +u
             source "$env_dir/.autoenv/exit.d/$name"
+            set -u
         done
     }
 
@@ -1484,7 +1488,7 @@ __autoenv_scan() {
                 # ensure the symlink is valid too
                 real_scan_dir=$(builtin cd "$scan_dir" && pwd -P)
                 [ "$(readlink "$root_env_dir/$env_name")" = $(builtin cd "$real_scan_dir" && pwd -P) ] || {
-                    lib_log_error "Name mistmach: $root_env_dir/$env_name points elsewhere; fix .autoenv/.name or run: ae forget '$env_name'"
+                    lib_log_error "Name mismatch: $root_env_dir/$env_name points elsewhere; fix .autoenv/.name or run: ae forget '$env_name'"
                     exit 1
                 }
             ) && found_envs+=("$(builtin cd "$scan_dir" && pwd -P)")

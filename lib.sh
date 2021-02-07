@@ -74,7 +74,6 @@ lib_strip_color() {
     sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g'
 }
 
-
 # echo back user input, optionally after validating it
 # $1  = prompt to give
 # $2+ = -$a|--$arg OR valid matches to enforce, if any
