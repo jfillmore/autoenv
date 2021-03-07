@@ -1,10 +1,4 @@
  #!/bin/bash -u
-#
-# TODO:
-# - exec batches of aliases from known envs
-#   - serial (w/ basic bool logic) vs batch mode (supporting auto-restart), confirm w/ beep-alerts when waiting (e.g. notify function)
-#   - dry-run
-
 
 # --- main internals --
 __AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached;
@@ -234,7 +228,7 @@ __autoenv_usage_up() {
     lib_log_raw "
 Run daemons from 'up.d/' in alphabetical order. Failures are printed to
 stderr. May optionally run one or more specific daemons. Tracks '.\$daemon.pid'
-files in the 'up.d/' dir. Skips daemons with PID files unless --force is used.
+files in the 'up.d/' dir. Skips daemons with PID files unless --force|-f is used.
 The working directory will be the env dir.
 "
 }
@@ -245,7 +239,7 @@ __autoenv_usage_down() {
     lib_log_raw "
 Stop daemons started from 'up.d/' in alphabetical order. Failures are printed to
 stderr. May optionally stop one or more specific daemons. Uses '.\$daemon.pid'
-files in the 'up.d/' dir to determine who is running. If --children is given,
+files in the 'up.d/' dir to determine who is running. If --children|-c is given,
 child processes will be terminated directly first, likely indirectly ending the
 daemon.
 "
@@ -948,15 +942,30 @@ __autoenv_run() {
 __autoenv_sync() {
     local target_dir
     local verbose=0
+    local shasum
     local target_names=()
     local sync_src="${AUTOENV_SYNC_URL:-}"
     local dryrun=0
+
+    # sanity checks!
     [ -n "$sync_src" ] || {
         lib_log_error "Sync failed; Export 'AUTOENV_SYNC_URL' to a URL containing autoenv sync directories."
         return 1
     }
+    [ $# -ge 2 ] || {
+        lib_log_error "At least two arguments are required."
+        __autoenv_usage_sync
+        return 1
+    }
+    shasum="$(which shasum 2>/dev/null) -a 1" \
+        || shasum=$(which sha1sum 2>/dev/null) \
+        || {
+            lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
+            return 1
+        }
 
     # get our target dir and the sync target names + misc args
+    target_dir="$1"; shift
     while [ $# -gt 0 ]; do
         case "$1" in
             -v|--verbose)
@@ -966,20 +975,11 @@ __autoenv_sync() {
                 dryrun=1
                 ;;
             *)
-                [ -z "$target_dir" ] \
-                    && target_dir="$1" \
-                    || target_names+=("$1")
+                target_names+=("$1")
         esac
         shift
     done
 
-
-    shasum="$(which shasum 2>/dev/null) -a 1" \
-        || shasum=$(which sha1sum 2>/dev/null) \
-        || {
-            lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
-            return 1
-        }
     # do everything in subshells to minimize env polution
     (
     local target i base_dir file_name exec_bit checksum path tmp_path \
@@ -1286,7 +1286,7 @@ __autoenv_log_env_info() {
 # print information about each active env
 __autoenv_env_info() {
     local env_dir i
-    local envs="$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")"
+    local envs="$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" 2>/dev/null | tr "\n" " ")"
     lib_cols --min -d "\033[0;30;44m ░ " \
         -p "\033[0;34;40m░▒▓" \
         -h "\033[0;30;44mENVS: " \
@@ -1457,7 +1457,6 @@ __autoenv_scan() {
     local env_name
     local found_envs=()
     local real_scan_dir
-    #set -x
     local root_env_dir="$__AUTOENV_ROOT/.autoenv/envs"
     local scan_dir="$PWD"
     local seen_root=0
@@ -1521,7 +1520,6 @@ __autoenv_scan() {
                 || __autoenv_init "$env"
         fi
     done
-    #set +x
 }
 
 
