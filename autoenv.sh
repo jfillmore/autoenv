@@ -1350,11 +1350,12 @@ __autoenv_init() {
     # and finally, our init scripts
     [ -d "$env_dir/.autoenv/init.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/init.d/"); do
+            [ -x "$env_dir/.autoenv/init.d/$name" ] || continue
             lib_log "   $(lib_color purple '»»' fushia) . init.d/$name" '1;35;40'
-            # many scripts use sloppy var handling, so ignore this
+            # many scripts use sloppy var handling, so ignore this :(
             set +u
             source "$env_dir/.autoenv/init.d/$name" \
-                || lib_log_error "Failed to run env init script '$name'"
+                || lib_log_error "Failed to source env init script '$name'"
             set -u
         done
         unset AUTOENV_ENV
