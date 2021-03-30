@@ -446,16 +446,7 @@ __autoenv_depth() {
 
 # echos curl or wget w/ default args to assist with HTTP requests
 __autoenv_http_agent() {
-    local agent https
-    local url="$1"
-    # see if we are using HTTPs or not
-    if [ "$(echo "${url:0:6}" | tr '[a-z]' '[A-Z]')" = "HTTPS:" ]; then
-        https=1
-    else
-        https=0
-    fi
-    # detect which HTTP agent is installed
-    agent=$(which curl) &>/dev/null
+    local agent=$(which curl) &>/dev/null
     if [ $? -eq 0 ]; then
         agent="$agent --silent --fail"
     else
@@ -476,16 +467,16 @@ __autoenv_http_agent() {
 # $1 = URL to request
 # $2... = extra arguments
 __autoenv_http() {
-    local agent
-    local url
-    local output_file=
+    local agent=''
+    local url=''
+    local output_file=''
     local args=()
 
     # get agent/url and any extra args
     while [ $# -gt 0 ]; do
         case "$1" in
             -a|--agent)
-                [ $# -ge 1 ] || {
+                [ $# -ge 2 ] || {
                     lib_log_error "missing arg to __autoenv_http -a|--agent"
                     return 1
                 }
@@ -493,7 +484,7 @@ __autoenv_http() {
                 shift
                 ;;
             -o|--output)
-                [ $# -ge 1 ] || {
+                [ $# -ge 2 ] || {
                     lib_log_error "missing arg to __autoenv_http -o|--output"
                     return 1
                 }
@@ -810,7 +801,7 @@ __autoenv_up() {
                 rm -f "$pid_file" &>/dev/null
             ) &
         done
-    
+
     return 0
 }
 
@@ -1350,12 +1341,11 @@ __autoenv_init() {
     # and finally, our init scripts
     [ -d "$env_dir/.autoenv/init.d" ] && {
         for name in $(ls -1 "$env_dir/.autoenv/init.d/"); do
-            [ -x "$env_dir/.autoenv/init.d/$name" ] || continue
             lib_log "   $(lib_color purple '»»' fushia) . init.d/$name" '1;35;40'
-            # many scripts use sloppy var handling, so ignore this :(
+            # many scripts use sloppy var handling, so ignore this
             set +u
             source "$env_dir/.autoenv/init.d/$name" \
-                || lib_log_error "Failed to source env init script '$name'"
+                || lib_log_error "Failed to run env init script '$name'"
             set -u
         done
         unset AUTOENV_ENV
