@@ -126,6 +126,7 @@ by the 'file-index' autoenv command. Uses 'curl' by default but falls back to
 
 ARGUMENTS:
 
+  -f|--force        Force download files regardless of shasums
   -h|--help         This information
   -d|--dryrun       Download and check files, but don't replace existing ones
   -v|--verbose      Print verbose sync information
@@ -444,18 +445,26 @@ __autoenv_depth() {
 }
 
 
+# TODO: prune?
+## print the depth a variable was found at; returns 1 if the env var was not defined
+## $1=name of variable to search for
+#__autoenv_var_depth() {
+#    local to_match="$1"
+#    local item
+#    [ -z "$to_match" -o ${#__AUTOENV_VARS[*]} -gt 0 ] || return 1
+#    for item in "${__AUTOENV_VARS[@]}"; do
+#        if [ "${item##*:}" = "$to_match" ]; then
+#            echo ${item%%:*}
+#            return 0
+#        fi
+#    done
+#    return 1
+#}
+
+
 # echos curl or wget w/ default args to assist with HTTP requests
 __autoenv_http_agent() {
-    local agent https
-    local url="$1"
-    # see if we are using HTTPs or not
-    if [ "$(echo "${url:0:6}" | tr '[a-z]' '[A-Z]')" = "HTTPS:" ]; then
-        https=1
-    else
-        https=0
-    fi
-    # detect which HTTP agent is installed
-    agent=$(which curl) &>/dev/null
+    local agent=$(which curl) &>/dev/null
     if [ $? -eq 0 ]; then
         agent="$agent --silent --fail"
     else
@@ -476,16 +485,16 @@ __autoenv_http_agent() {
 # $1 = URL to request
 # $2... = extra arguments
 __autoenv_http() {
-    local agent
-    local url
-    local output_file=
+    local agent=''
+    local url=''
+    local output_file=''
     local args=()
 
     # get agent/url and any extra args
     while [ $# -gt 0 ]; do
         case "$1" in
             -a|--agent)
-                [ $# -ge 1 ] || {
+                [ $# -ge 2 ] || {
                     lib_log_error "missing arg to __autoenv_http -a|--agent"
                     return 1
                 }
@@ -493,7 +502,7 @@ __autoenv_http() {
                 shift
                 ;;
             -o|--output)
-                [ $# -ge 1 ] || {
+                [ $# -ge 2 ] || {
                     lib_log_error "missing arg to __autoenv_http -o|--output"
                     return 1
                 }
@@ -523,7 +532,7 @@ __autoenv_http() {
             || args+=(-O "$output_file")  # wget
     }
     # unquoted on purpose... we'll possibly have args
-    $agent "${args[@]}"
+    lib_cmd $agent "${args[@]}"
 }
 
 
@@ -942,6 +951,7 @@ __autoenv_run() {
 __autoenv_sync() {
     local target_dir
     local verbose=0
+    local force=0
     local shasum
     local target_names=()
     local sync_src="${AUTOENV_SYNC_URL:-}"
@@ -971,6 +981,9 @@ __autoenv_sync() {
             -v|--verbose)
                 verbose=1
                 ;;
+            -f|--force)
+                force=1
+                ;;
             -d|--dryrun)
                 dryrun=1
                 ;;
@@ -979,6 +992,11 @@ __autoenv_sync() {
         esac
         shift
     done
+
+    [ $(lib_prompt "Sync \033[1;37m${target_names[@]}\033[0m to '$target_dir'" -n 1 y n) = n ] && {
+        lib_log 'Aborting sync'
+        return 1
+    }
 
     # do everything in subshells to minimize env polution
     (
@@ -994,66 +1012,70 @@ __autoenv_sync() {
 
     # for each target download the autoenv index and listed files
     for ((i=0; i<${#target_names[*]}; i++)); do
+
         target="${target_names[i]}"
         # kill any extra slashes at the end
         target="${target%%/}"
         __autoenv_debug "Downloading index list for '$target'"
+
         # download all the files listed in the index
         __autoenv_http "$sync_src/$target/index.autoenv" | while read exec_bit checksum path; do
-            __autoenv_debug "fetching file '$path'"
             # normalize the path to clean extra slashes, preceding periods
             path="$(echo "$path" | sed 's#//*#/#g' | sed 's#^\./##')"
             base_dir="$(dirname "$path")" || lib_fail "Failed to get base directory of '$path'."
             file_name="$(basename "$path")" || lib_fail "Failed to get file name of '$path'."
             tmp_path=".$file_name.autoenv-sync.$$"
-            __autoenv_http "$sync_src/$target/$path" -o "$tmp_path" \
-                || {
+
+            # before we download, see if we even need a new version
+            file_changed=1
+            if [ -e "$base_dir/$file_name" -a $force -eq 0 ]; then
+                old_checksum=$($shasum "$base_dir/$file_name" | awk '{print $1}') \
+                    || lib_fail "Failed to generate checksum for existing copy of '$path'."
+                if [ "$old_checksum" = "$checksum" ]; then
+                    __autoenv_debug "-- skipping download of unchanged file: '$path'"
+                    file_changed=0
+                fi
+            fi
+
+            # only download files we need updates on
+            [ $file_changed -eq 1 ] && {
+                __autoenv_debug "-- downloading file: '$path'"
+                __autoenv_http "$sync_src/$target/$path" -o "$tmp_path" || {
                     rm "$tmp_path" &>/dev/null
                     lib_fail "Failed to download '$sync_src/$target/$path' to '$tmp_path'."
                 }
-            # does the checksum match?
-            new_checksum=$($shasum "$tmp_path" | awk '{print $1}') \
-                || lib_fail "Failed to generate checksum for '$path'."
-            if [ "$new_checksum" != "$checksum" ]; then
-                preview_lines=6
-                __autoenv_debug "-- File checksum mismatch (first $preview_lines lines)"
-                __autoenv_debug "------------------------------------------"
-                head -n $preview_lines "$tmp_path" >&2
-                __autoenv_debug "------------------------------------------"
-                # file failed to download... odd. Permissions/misconfig, perhaps?
-                rm "$tmp_path" &>/dev/null
-                lib_fail "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
-            fi
-            # do we have this file already, and with a matching checksum?
-            file_changed=1
-            if [ -e "$base_dir/$file_name" ]; then
-                old_checksum=$($shasum "$base_dir/$file_name" | awk '{print $1}') \
-                    || {
-                        rm "$tmp_path" &>/dev/null
-                        lib_fail "Failed to generate checksum for existing copy of '$path'."
-                    }
-                if [ "$old_checksum" = "$checksum" ]; then
-                    __autoenv_debug "-- skipping unchanged file"
-                    file_changed=0
+                # does the checksum match?
+                new_checksum=$($shasum "$tmp_path" | awk '{print $1}') \
+                    || lib_fail "Failed to generate checksum for '$path'."
+                if [ "$new_checksum" != "$checksum" ]; then
+                    preview_lines=6
+                    __autoenv_debug "-- File checksum mismatch (first $preview_lines lines)"
+                    __autoenv_debug "------------------------------------------"
+                    head -n $preview_lines "$tmp_path" >&2
+                    __autoenv_debug "------------------------------------------"
+                    # file failed to download... odd. Permissions/misconfig, perhaps?
+                    rm "$tmp_path" &>/dev/null
+                    lib_fail "Checksum error on '$path' from '$target' (expected: $checksum, got: $new_checksum)."
                 fi
+            }
+
+            if [ $file_changed -eq 0 ]; then
                 # regardless if the file changed make sure the exec bit is set right
-                if [ $file_changed -eq 0 \
-                    -a $exec_bit = '1' \
-                    -a ! -x "$base_dir/$file_name" \
-                    ]; then
-                    __autoenv_debug "-- toggling execution bit on"
-                    chmod u+x "$base_dir/$file_name" \
-                        || {
-                            rm "$tmp_path" &>/dev/null
-                            lib_fail "Failed to chmod 'u+x' file '$base_dir/$file_name'."
-                        }
-                fi
-            fi
-            if [ $file_changed -eq 1 ]; then
-                # was this a script?
+                (
+                    if [ $exec_bit = '1' -a ! -x "$base_dir/$file_name" ]; then
+                        lib_cmd chmod u+x "$base_dir/$file_name" || lib_fail
+                    fi
+                    if [ $exec_bit = '0' -a -x "$base_dir/$file_name" ]; then
+                        lib_cmd chmod u-x "$base_dir/$file_name" || lib_fail
+                    fi
+                ) || {
+                    [ -f "$tmp_path" ] && rm "$tmp_path" &>/dev/null
+                    lib_fail "Failed to chmod 'u+x' file '$base_dir/$file_name'."
+                }
+            else
+                # prepare exec bit if needed before moving it into place
                 if [ $exec_bit = '1' ]; then
-                    __autoenv_debug "-- toggling execution bit"
-                    chmod u+x "$tmp_path" \
+                    lib_cmd chmod u+x "$tmp_path" \
                         || {
                             rm "$tmp_path" &>/dev/null
                             lib_fail "Failed to chmod 'u+x' file '$tmp_path'."
@@ -1073,9 +1095,12 @@ __autoenv_sync() {
                     lib_fail "Failed to move '$tmp_path' to '$base_dir/$file_name'."
                 }
             fi
+
             # didn't change or it was a dry run? still be sure to cleanup
             [ -f "$tmp_path" ] && rm "$tmp_path" &>/dev/null
+
         done
+
     done
     )
 }
