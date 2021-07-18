@@ -1,6 +1,6 @@
 # AUTOENV
 
-![usage info](https://github.com/jfillmore/autoenv/raw/master/ae-usage.png)
+![usage info](https://github.com/jfillmore/autoenv/raw/main/ae-usage.png)
 
 
 ## Minimalist Usage
@@ -11,7 +11,7 @@ Add autoenv to an otherwise unmodified environment.
 # snag the script
 curl -s \
     -o ~/.autoenv.sh \
-    https://raw.githubusercontent.com/jfillmore/autoenv/master/autoenv.sh
+    https://raw.githubusercontent.com/jfillmore/autoenv/main/autoenv.sh
 
 # initialize ourself
 source ~/.autoenv.sh
@@ -34,7 +34,7 @@ source ~/dev/jkf/autoenv/autoenv.sh
 
 # setup a home env w/ a handy sync source
 yes | ae create ~ home
-echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/master' \
+echo 'https://raw.githubusercontent.com/jfillmore/autoenv-home/main' \
     > ~/.autoenv/vars/AUTOENV_SYNC_URL
 
 # sync some useful default stuff
