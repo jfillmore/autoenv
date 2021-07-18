@@ -993,7 +993,7 @@ __autoenv_sync() {
         shift
     done
 
-    [ $(lib_prompt "Sync \033[1;37m${target_names[@]}\033[0m to '$target_dir'" -n 1 y n) = n ] && {
+    [ $(lib_prompt "Sync \033[1;37m${target_names[*]}\033[0m to '$target_dir'" -n 1 y n) = n ] && {
         lib_log 'Aborting sync'
         return 1
     }
