@@ -1252,7 +1252,7 @@ __autoenv_log_env_info() {
     local pid
     local env_dir="${__AUTOENV_ENVS[depth]}"
 
-    lib_log "$(($depth + 1)). ─═« $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) »═─ $(lib_color white "$env_dir" white)" '0;36;40'
+    lib_log "$(($depth + 1)). ─═« $(lib_color lightcyan "$(<"$env_dir/.autoenv/.name")" cyan) »═─ $(lib_color white "$env_dir" white)" '0;36'
 
     items=()
     for ((i=0; i<${#__AUTOENV_VARS[*]}; i++)); do
@@ -1260,7 +1260,7 @@ __autoenv_log_env_info() {
         [ "${item%%:*}" = "$depth" ] && items+=("${item##*:}")
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-        -h "\033[0;32;40m  ░▒▌EnvVars▐▒░ " \
+        -h "\033[0;32m  ░▒▌EnvVars▐▒░ " \
         -c lime \
         "${items[@]}" >&2
 
@@ -1270,7 +1270,7 @@ __autoenv_log_env_info() {
         [ "${item%%:*}" = "$depth" ] && items+=("${item##*:}")
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-        -h "\033[0;33;40m  ░▒▌Aliases▐▒░ " \
+        -h "\033[0;33m  ░▒▌Aliases▐▒░ " \
         -c lemon \
         "${items[@]}"
 
@@ -1282,7 +1282,7 @@ __autoenv_log_env_info() {
         }
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-         -h "\033[0;31;40m  ░▒▌Scripts▐▒░ " \
+         -h "\033[0;31m  ░▒▌Scripts▐▒░ " \
          -c pink \
          "${items[@]}"
 
@@ -1302,7 +1302,7 @@ __autoenv_log_env_info() {
         }
     done
     [ ${#items[*]} -gt 0 ] && lib_cols --min \
-         -h "\033[0;35;40m  ░▒▌Daemons▐▒░ " \
+         -h "\033[0;35m  ░▒▌Daemons▐▒░ " \
          -c fushia \
          "${items[@]}"
 }
@@ -1313,9 +1313,9 @@ __autoenv_env_info() {
     local env_dir i
     local envs="$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" 2>/dev/null | tr "\n" " ")"
     lib_cols --min -d "\033[0;30;44m ░ " \
-        -p "\033[0;34;40m░▒▓" \
+        -p "\033[0;34m░▒▓" \
         -h "\033[0;30;44mENVS: " \
-        -s "\033[0;34;40m▓▒░" \
+        -s "\033[0;34m▓▒░" \
         -c '1;37;44' \
         $envs
     for ((i=0; i<${#__AUTOENV_ENVS[*]}; i++)); do

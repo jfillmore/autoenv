@@ -26,10 +26,10 @@ lib_fail() {
 # when LIB_VERBOSE=1
 lib_cmd() {
     if [ ${LIB_DRYRUN:-0} -eq 1 ]; then
-        echo -e "\033[0;33;40m# $(printf "'%s' " "$@")\033[0m" >&2
+        echo -e "\033[0;33m# $(printf "'%s' " "$@")\033[0m" >&2
     else
         [ ${LIB_VERBOSE:-0} -eq 1 ] \
-            && echo -e "\033[0;33;40m# $(printf "'%s' " "$@")\033[0m" >&2
+            && echo -e "\033[0;33m# $(printf "'%s' " "$@")\033[0m" >&2
         "$@"
     fi
 }
@@ -39,9 +39,9 @@ lib_cmd() {
 # $1 = message
 # $2 = color (dafault: dark grey)
 lib_log() {
-    local clr="${2:-0;34;40}"
+    local clr="${2:-0;34}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
-    echo -e "\033[1;30;40m# ($LIB_TAG) \033[${clr}m${1:-}\033[0m" >&2
+    echo -e "\033[1;30m# ($LIB_TAG) \033[${clr}m${1:-}\033[0m" >&2
 }
 
 
@@ -49,10 +49,10 @@ lib_log() {
 # $1 = message
 # $2 = color (default: pink)
 lib_log_error() {
-    local clr="${2:-0;31;40}"
+    local clr="${2:-0;31}"
     local error_label="${3:-error}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
-    echo -e "\033[1;31;40m# ($LIB_TAG $error_label) \033[${clr}m${1:-}\033[0m" >&2
+    echo -e "\033[1;31m# ($LIB_TAG $error_label) \033[${clr}m${1:-}\033[0m" >&2
 }
 
 
@@ -60,7 +60,7 @@ lib_log_error() {
 # $1 = message
 # $2 = color (default: white)
 lib_log_raw() {
-    local clr="${2:-0;37;40}"
+    local clr="${2:-0;37}"
     [ "${clr//;/}" = "$clr" ] && clr=$(lib_color "$clr")
     echo -e "\033[${clr}m${1:-}\033[0m" >&2
 }
@@ -68,7 +68,7 @@ lib_log_raw() {
 
 # echo back stdin, minus any color codes
 # e.g.
-# $ echo -e "\033[1;32;40mfoo\033[0mbar" | lib_strip_color
+# $ echo -e "\033[1;32mfoo\033[0mbar" | lib_strip_color
 # foobar
 lib_strip_color() {
     sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g'
@@ -160,11 +160,11 @@ lib_prompt() {
     # read and optionally validate the input until we get something right
     [ $fuzzy_match -eq 1 ] && opts_msg=" (prefix match allowed)"
     [ $show_menu -eq 0 ] \
-        && msg="$msg$opts_msg\033[0;33;40m$opts\033[0m" \
-        || msg="Options$opts_msg:\033[1;34;40m$opts\033[0;0m\n$msg"
+        && msg="$msg$opts_msg\033[0;33m$opts\033[0m" \
+        || msg="Options$opts_msg:\033[1;34m$opts\033[0;0m\n$msg"
     while [ -z "$match" ]; do
         error=
-        echo -en "$line_break$msg \033[1;30;40m>\033[0m " >&2
+        echo -en "$line_break$msg \033[1;30m>\033[0m " >&2
         if [ "${#read_args[*]}" -eq 0 ]; then
             read user_input
         else
@@ -422,7 +422,7 @@ lib_list_update() {
 }
 
 # get a color code based on name or print a message with a certain color code/name
-# $1 = bash color code (e.g. 0;31;40) or nickname
+# $1 = bash color code (e.g. 0;31) or nickname
 # $2 = optional text to print with the color; otherwise ethe code is printed
 # $3 = optional bash color code to reset to after if text is given; default=reset
 lib_color() {
@@ -434,8 +434,8 @@ lib_color() {
         darkgrey pink lime lemon lightblue fushia lightcyan white reset
     )
     local color_codes=(
-        '0;30;40' '0;31;40' '0;32;40' '0;33;40' '0;34;40' '0;35;40' '0;36;40' '0;37;40' '0'
-        '1;30;40' '1;31;40' '1;32;40' '1;33;40' '1;34;40' '1;35;40' '1;36;40' '1;37;40' '0'
+        '0;30' '0;31' '0;32' '0;33' '0;34' '0;35' '0;36' '0;37' '0'
+        '1;30' '1;31' '1;32' '1;33' '1;34' '1;35' '1;36' '1;37' '0'
     )
     local i
     # map names to codes if needed
