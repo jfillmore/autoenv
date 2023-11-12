@@ -462,45 +462,20 @@ __autoenv_depth() {
 #}
 
 
-# echos curl or wget w/ default args to assist with HTTP requests
-__autoenv_http_agent() {
-    local agent=$(which curl) &>/dev/null
-    if [ $? -eq 0 ]; then
-        agent="$agent --silent --fail"
-    else
-        # no curl? how about wget?
-        agent=$(which wget) || {
-            lib_log "Unable to locate 'curl' or 'wget' to download files."
-            return 1
-        }
-        agent="$agent --quiet -O -"
-    fi
-    echo "$agent"
-}
-
 
 # make an HTTP call and optionally save output to a file
-# -a|--agent AGENT   Agent to use; autodetects by default
 # -o|--output PATH   Save output to a file; requires curl or wget
 # $1 = URL to request
 # $2... = extra arguments
 __autoenv_http() {
     local agent=''
     local url=''
-    local output_file=''
+    local output_file='-'
     local args=()
 
     # get agent/url and any extra args
     while [ $# -gt 0 ]; do
         case "$1" in
-            -a|--agent)
-                [ $# -ge 2 ] || {
-                    lib_log_error "missing arg to __autoenv_http -a|--agent"
-                    return 1
-                }
-                agent="$2"
-                shift
-                ;;
             -o|--output)
                 [ $# -ge 2 ] || {
                     lib_log_error "missing arg to __autoenv_http -o|--output"
@@ -519,20 +494,25 @@ __autoenv_http() {
         esac
         shift
     done
-    [ -n "$agent" ] || agent=$(__autoenv_http_agent)
 
     [ -n "$url" ] || {
         lib_log_error "No URL given to download"
         return 1
     }
-    args+=("$url")
-    [ -n "$output_file" ] && {
-        [ "${agent%%curl*}" != "$agent" ] \
-            && args+=(-o "$output_file") \
-            || args+=(-O "$output_file")  # wget
-    }
-    # unquoted on purpose... we'll possibly have args
-    lib_cmd $agent "${args[@]}"
+
+    agent="$(which curl)" &>/dev/null
+    if [ -n "${agent[0]}" ]; then
+        agent_args=($agent "$url" '--silent' '--fail' '-o' "$output_file")
+    else
+        # no curl? how about wget?
+        agent=$(which wget) || {
+            lib_log "Unable to locate 'curl' or 'wget' to download files."
+            return 1
+        }
+        agent_args=("$agent" "$url" '--quiet' '-O' "$output_file")
+    fi
+
+    lib_cmd "${agent_args[@]}"
 }
 
 
@@ -1118,12 +1098,16 @@ __autoenv_file_index() {
     local dryrun=0
     local dir
 
-    shasum="$(which shasum 2>/dev/null) -a 1" \
-        || shasum=$(which sha1sum 2>/dev/null) \
-        || {
+    shasum="$(which shasum 2>/dev/null)"
+    if [ "${#shasum}" -gt 0 ]; then
+        shasum_args=("$shasum" '-a' 1)
+    else
+        shasum="$(which sha1sum 2>/dev/null)" || {
             lib_log_error "Failed to locate 'shasum' or 'sha1sum' binary."
             return 1
         }
+        shasum_args=("$shasum")
+    fi
 
     while [ $# -gt 0 ]; do
         case "$1" in
