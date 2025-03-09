@@ -1484,9 +1484,10 @@ __autoenv_scan() {
         [ -d "$scan_dir/.autoenv" ] && {
             # only add envs that are tracked properly
             (
+                env_dir="${scan_dir##$__AUTOENV_ROOT/}"
                 # ensure we have a name and thus have been "added" already
                 [ -s "$scan_dir/.autoenv/.name" ] || {
-                    lib_log "Untracked env: ${scan_dir##$__AUTOENV_ROOT/}; add with: ae add \"$scan_dir\" [NAME]" '1;33;40'
+                    lib_log "Untracked env: '$env_dir'; add with: ae add \"$scan_dir\" [NAME]" '1;33;40'
                     exit 1
                 }
                 env_name=$(<"$scan_dir/.autoenv/.name") || {
@@ -1495,6 +1496,10 @@ __autoenv_scan() {
                 }
                 # ensure the symlink is valid too
                 real_scan_dir=$(builtin cd "$scan_dir" && pwd -P)
+                [ -x "$root_env_dir/$env_name" ] || {
+                    lib_log_error "Untracked env: '$env_dir' ('$root_env_dir/$env_name' does not exist); add with: ae add '$scan_dir' [NAME]" '1;33;40'
+                    exit 1
+                }
                 [ "$(readlink "$root_env_dir/$env_name")" = $(builtin cd "$real_scan_dir" && pwd -P) ] || {
                     lib_log_error "Name mismatch: $root_env_dir/$env_name points elsewhere; fix .autoenv/.name or run: ae forget '$env_name'"
                     exit 1
