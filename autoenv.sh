@@ -538,7 +538,7 @@ __autoenv_create() {
     }
     # init the env
     lib_confirm "Create '$env_name' in '$env_root'?" || return 1
-    mkdir -p "$env_root/.autoenv/"{vars,aliases,exit.d,init.d,up.d} || {
+    mkdir -p "$env_root/.autoenv/"{vars,scripts,aliases,exit.d,init.d,up.d} || {
         lib_log_error "Failed to create autoenv dirs in '$env_root/.autoenv/'"
         return 1
     }
@@ -799,7 +799,7 @@ __autoenv_up() {
                 rm -f "$pid_file" &>/dev/null
             ) &
         done
-    
+
     return 0
 }
 
