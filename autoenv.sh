@@ -1,5 +1,8 @@
  #!/bin/bash -u
 
+# DREAM
+# - 
+
 # --- main internals --
 __AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached;
 __AUTOENV_ENVS=()  # list of active envs
@@ -14,6 +17,7 @@ __AUTOENV_CMDS=(
     create
     down
     edit
+    favs
     forget
     file-index
     go
@@ -74,6 +78,7 @@ __autoenv_usage() {
 [0;34;40m║[0;33;40m   # generic                                                          [0;34;40m║[0m
 [0;34;40m║[1;33;40m   help[0;37;40m                     this info                                 [0;34;40m║[0m[0m
 [0;34;40m║[1;33;40m   info[0;37;40m                     summarize known and active envs           [0;34;40m║[0m[0m
+[0;34;40m║[1;33;40m   favs[0;37;40m [-e|--edit] [NAME]  run/edit a favorite command               [0;34;40m║[0m[0m
 [0;34;40m║[1;33;40m   reload[0;37;40m                   reinitialize all .envs along the path     [0;34;40m║[0m[0m
 [0;34;40m║[0;33;40m   # env management (\$HOME/.autoenv/envs/* = NAME symlinks to envs)   [0;34;40m║[0m
 [0;34;40m║[1;33;40m   add[1;37;40m PATH [NAME]          [0;37;40madd existing env                          [0;34;40m║[0m
@@ -210,6 +215,16 @@ __autoenv_usage_go() {
     lib_log_raw "
 Change directory to the env named and optionally start daemons and/or run
 all scripts.
+"
+}
+
+
+__autoenv_usage_favs() {
+    lib_log "Usage: autoenv favs -e|--edit [FILTER]"
+    lib_log_raw "
+Prints a list of favorite commands w/ a shortcut to quickly execute it. If a
+FILTER is given, only commands matching are shown. Using -e|--edit loads
+the \$AUTOENV_ENV/.favs file for editing.
 "
 }
 
@@ -612,6 +627,84 @@ __autoenv_forget() {
         __autoenv_exit "$env_root"
     }
     return 0
+}
+
+
+__autoenv_favs() {
+    local favs_file="$AUTOENV_ENV/.autoenv/favs"
+    [ "${1:-}" = '-e' -o "${1:-}" = '--edit' ] && {
+        [ $# -ge 2 ] && lib_log_error "Ignoring extra FILTER argument when editing favs."
+        "$EDITOR" "$favs_file"
+        return $?
+    }
+    [ -s "$favs_file" ] || {
+        lib_log_error "No favs exist in '$favs_file' yet; edit with \`ae favs -e\`."
+        return
+    }
+
+    local keys chars favs i j line filter cmd
+    chars=( {a..z} {A..Z} )
+    i=0
+    filter="${1:-}"
+
+    # Curate two arrays to track shortcut + command for each fav. Print our
+    # favs as we go, all pretty-like.
+    echo -e "\033[1;36m=== Favorites: ==========="
+    cmd=""
+    cmd_pretty=""
+    while IFS= read -r line; do
+        # Reflect back formatting/comments:
+        [ -z "$line" ] && { echo; continue; }
+        [[ "$line" =~ ^[[:space:]]*# ]] && { echo -e "\033[0;36m$line\033[0m"; continue; }
+        # Accumulate multi-line commmands as needed
+        if [ "${line%\\}" = "$line" ]; then  # trailing \, take it and map it
+            cmd+="$line"
+            cmd_pretty+="$line"
+        else # we have a trailing \
+            cmd+="${line%\\} "
+            cmd_pretty+="$line"$'\n  '
+            continue
+        fi
+        # Filter out any mismatches, if arg given.
+        [ -n "$filter" -a "${cmd%%$filter*}" = "$cmd" ] && {
+            cmd=''
+            cmd_pretty=''
+            continue
+        }
+        [ -n "$filter" ] && {
+            local _highlight=$'\033[1;33m'
+            local _normal=$'\033[0m'
+            cmd_pretty="${cmd_pretty//$filter/${_highlight}$filter${_normal}}"
+        }
+        [ $i -gt 52 ] && {
+            lib_log_error "More than 52 favs in $favs_file; ignoring extras."
+            break
+        }
+        favs[i]="$cmd"
+        keys[i]="${chars[i]}"
+        echo -e "\033[0;32m[\033[1;32m${keys[i]}\033[0;32m]\033[0m ${cmd_pretty}"
+        cmd=''
+        cmd_pretty=''
+        i=$((i + 1))
+    done < "$favs_file"
+
+    # Prompt for single key
+    echo -e "\n\033[1;36m==========================\033[0m"
+    echo -en "\033[1;32mChoose (^c,empty=cancel) > \033[0m"
+    IFS= read -r -n1 choice || return 1
+    echo
+    [ -z "$choice" ] && return 1
+
+    # Match key to run fav
+    for ((j=0; j<i; j++)); do
+        if [[ "$choice" == "${keys[j]}" ]]; then
+            eval "${favs[j]}"
+            return $?
+        fi
+    done
+
+    echo -e "\033[1;31mInvalid selection.\033[0m"
+    return 1
 }
 
 
@@ -1557,6 +1650,7 @@ __autoenv() {
     }
     shift
     case "$cmd" in
+        # misc + env management
         add)
             [ $# -ge 1 ] || {
                 lib_log_error "usage: add PATH [NAME]"
@@ -1579,6 +1673,9 @@ __autoenv() {
             }
             __autoenv_scan
             ;;
+        edit)
+            __autoenv_edit "$@" || return 1
+            ;;
         forget)
             [ $# -eq 1 ] || {
                 lib_log_error "usage: forget NAME"
@@ -1589,10 +1686,18 @@ __autoenv() {
                 return 1
             }
             ;;
-        edit)
-            __autoenv_edit "$@" || return 1
+        favs)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_favs
+                return
+            }
+            __autoenv_favs "$@" || return 1
             ;;
         go)
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_go
+                return
+            }
             [ $# -eq 1 ] || {
                 lib_log_error "usage: go [-u|--up] NAME"
                 lib_log_raw "ENVS: $(lib_color lightcyan "$(ls -1 "$__AUTOENV_ROOT/.autoenv/envs" | tr "\n" " ")")" cyan
@@ -1603,22 +1708,8 @@ __autoenv() {
         help)
             __autoenv_usage
             ;;
-        sync)
-            [ $# -ge 1 ] || {
-                lib_log_error "At least one sync name expected"
-                __autoenv_usage_sync
-                return 1
-            }
-            lib_in_list "-h" "--help" -- "$@" && {
-                __autoenv_usage_sync
-                return
-            }
-            [ ${#__AUTOENV_ENVS[*]} -gt 0 ] || {
-                lib_log_error "Cannot perform sync without an active env"
-                __autoenv_usage_sync
-                return 1
-            }
-            __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
+        info)
+            __autoenv_env_info
             ;;
         reload)
             # pop off one env at a time, starting at the end
@@ -1629,6 +1720,8 @@ __autoenv() {
             # and initialize any found in the current dir (possibly less than we had before)
             __autoenv_scan
             ;;
+
+        # daemon-like hacks
         run)
             lib_in_list "-h" "--help" -- "$@" && {
                 __autoenv_usage_run
@@ -1636,17 +1729,6 @@ __autoenv() {
             }
             [ ${AUTOENV:-1} -ne 0 ] && \
                 __autoenv_run "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
-            ;;
-        go)
-            lib_in_list "-h" "--help" -- "$@" && {
-                __autoenv_usage_go
-                return
-            }
-            [ $# -eq 1 ] || {
-                lib_log_error "usage: go [-u|--up] NAME"
-                return 1
-            }
-            __autoenv_go "$@" || return 1
             ;;
         up)
             lib_in_list "-h" "--help" -- "$@" && {
@@ -1664,8 +1746,24 @@ __autoenv() {
             [ ${AUTOENV:-1} -ne 0 ] && \
                 __autoenv_down "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
-        info)
-            __autoenv_env_info
+
+        # syncronization commands
+        sync)
+            [ $# -ge 1 ] || {
+                lib_log_error "At least one sync name expected"
+                __autoenv_usage_sync
+                return 1
+            }
+            lib_in_list "-h" "--help" -- "$@" && {
+                __autoenv_usage_sync
+                return
+            }
+            [ ${#__AUTOENV_ENVS[*]} -gt 0 ] || {
+                lib_log_error "Cannot perform sync without an active env"
+                __autoenv_usage_sync
+                return 1
+            }
+            __autoenv_sync "${__AUTOENV_ENVS[${#__AUTOENV_ENVS[*]}-1]}" "$@"
             ;;
         file-index)
             [ $# -gt 0 ] || {
