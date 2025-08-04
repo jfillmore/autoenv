@@ -1191,6 +1191,7 @@ __autoenv_sync() {
 __autoenv_file_index() {
     local paths=()
     local shasum
+    local force=0
     local verbose=0
     local dryrun=0
     local dir
