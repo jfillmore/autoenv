@@ -698,7 +698,11 @@ __autoenv_favs() {
     # Match key to run fav
     for ((j=0; j<i; j++)); do
         if [[ "$choice" == "${keys[j]}" ]]; then
-            eval "${favs[j]}"
+            # Subshell to control working dir and add some process isolation.
+            (
+                cd "$AUTOENV_ENV" || exit 1
+                eval "${favs[j]}"
+            )
             return $?
         fi
     done
