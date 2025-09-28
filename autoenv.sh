@@ -637,6 +637,7 @@ __autoenv_favs_func () {
     return 0
 }
 __autoenv_favs() {
+    # DREAM: support imports for sharing common stuff
     local favs_file="$AUTOENV_ENV/.autoenv/favs"
     [ "${1:-}" = '-e' -o "${1:-}" = '--edit' ] && {
         [ $# -ge 2 ] && lib_log_error "Ignoring extra FILTER argument when editing favs."
@@ -1223,6 +1224,7 @@ __autoenv_sync() {
 __autoenv_file_index() {
     local paths=()
     local shasum
+    local force=0
     local verbose=0
     local dryrun=0
     local dir
