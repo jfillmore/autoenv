@@ -1,7 +1,7 @@
  #!/bin/bash -u
 
 # DREAM
-# - 
+# - `ae e s foo` fails if we have "foo" and "foobar"
 
 # --- main internals --
 __AUTOENV_ROOT="${AUTOENV_ROOT:-$HOME}"  # stop scanning for autoenv dirs when this path is reached;
@@ -630,6 +630,12 @@ __autoenv_forget() {
 }
 
 
+__autoenv_favs_func () {
+    # This is a placeholder! We dynamically generate this when running a fav so
+    # we can have code with string literals, not variable -- otherwise `jobs`
+    # will always show our literal command (the same for everything).
+    return 0
+}
 __autoenv_favs() {
     local favs_file="$AUTOENV_ENV/.autoenv/favs"
     [ "${1:-}" = '-e' -o "${1:-}" = '--edit' ] && {
@@ -642,7 +648,7 @@ __autoenv_favs() {
         return
     }
 
-    local keys chars favs i j line filter cmd
+    local keys chars favs i j line filter cmd favs_names
     chars=( {a..z} {A..Z} )
     i=0
     filter="${1:-}"
@@ -682,6 +688,7 @@ __autoenv_favs() {
         }
         favs[i]="$cmd"
         keys[i]="${chars[i]}"
+        favs_names[i]="${cmd%% *}"  # TBD
         echo -e "\033[0;32m[\033[1;32m${keys[i]}\033[0;32m]\033[0m ${cmd_pretty}"
         cmd=''
         cmd_pretty=''
@@ -698,16 +705,41 @@ __autoenv_favs() {
     # Match key to run fav
     for ((j=0; j<i; j++)); do
         if [[ "$choice" == "${keys[j]}" ]]; then
-            # Subshell to control working dir and add some process isolation.
-            (
-                cd "$AUTOENV_ENV" || exit 1
-                eval "${favs[j]}"
-            )
+            choice=""  # Trick! see below...
+            # Black magic! This actually works! The subshell goes in at the very
+            # last second to control working dir and add some process isolation.
+            # What doesn't work:
+            # - writing to $tmp_file and "./$tmp_file" just shows "./$tmp_file"
+            # - ( exec -a $lbl ... ) also still just shows our literal command
+            # - eval ${favs[j]} etc.
+            tmp_script="/tmp/ae-fav.sh"
+            {
+                echo "__autoenv_favs_func() {"
+                echo "  ("
+                echo "    cd '$AUTOENV_ENV'; ${favs[j]}"
+                echo "  )"
+                echo "}"
+            } > "$tmp_script"
+            [ $? -eq 0 ] || {
+                lib_log_error "Failed to write fav script to '$tmp_script'"
+                return 1
+            }
+            chmod +x "$tmp_script" || {
+                lib_log_error "Failed to make fav script '$tmp_script' executable"
+                return 1
+            }
+            . "$tmp_script"
+            __autoenv_favs_func
             return $?
         fi
     done
 
-    echo -e "\033[1;31mInvalid selection.\033[0m"
+    # We clear the choice when it works, so we know for sure this applies.
+    # There is an edge case to this: make valid choice, ctrl+z, and it shows
+    # otherwise?!
+    if [ -n "$choice" ]; then
+        echo -e "\033[1;31mInvalid selection.\033[0m"
+    fi
     return 1
 }
 
